@@ -53,3 +53,53 @@ void initCaseMode(List<String> rootPaths) {
   }
   currentCaseMode = CaseMode.sensitive;
 }
+
+/// A detected case conflict between two names.
+class CaseConflict {
+  final String name1;
+  final String name2;
+  final String directory;
+
+  const CaseConflict(this.name1, this.name2, this.directory);
+
+  @override
+  String toString() => '"$name1" vs "$name2" in $directory';
+}
+
+/// Scan a directory for case conflicts.
+///
+/// On case-insensitive filesystems (Windows, macOS), two files like
+/// `File.txt` and `file.txt` cannot coexist — the OS treats them as
+/// the same. This detects such conflicts BEFORE sync to warn the user.
+List<CaseConflict> detectCaseConflicts(String dirPath, {bool recursive = true}) {
+  final conflicts = <CaseConflict>[];
+  _scanDir(dirPath, conflicts, recursive);
+  return conflicts;
+}
+
+void _scanDir(String dirPath, List<CaseConflict> conflicts, bool recursive) {
+  final dir = Directory(dirPath);
+  if (!dir.existsSync()) return;
+
+  try {
+    final entries = dir.listSync(followLinks: false);
+    final nameMap = <String, String>{}; // lowercase → original
+
+    for (final entry in entries) {
+      final basename = entry.uri.pathSegments
+          .where((s) => s.isNotEmpty)
+          .last;
+      final lower = basename.toLowerCase();
+
+      if (nameMap.containsKey(lower)) {
+        conflicts.add(CaseConflict(nameMap[lower]!, basename, dirPath));
+      } else {
+        nameMap[lower] = basename;
+      }
+
+      if (recursive && entry is Directory) {
+        _scanDir(entry.path, conflicts, recursive);
+      }
+    }
+  } catch (_) {}
+}

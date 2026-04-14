@@ -8,6 +8,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../fs/os.dart';
+import '../fs/platform_ext.dart';
 import '../model/fspath.dart';
 import '../model/props.dart';
 import '../model/sync_path.dart';
@@ -19,8 +20,14 @@ typedef ProgressCallback = void Function(int transferred, int total);
 /// File-level sync operations with atomic write safety.
 class FileOps {
   final OsFs _os;
+  final PlatformFs _platform;
 
-  FileOps({OsFs? os}) : _os = os ?? const OsFs();
+  /// Whether to sync extended attributes.
+  final bool syncXattrs;
+
+  FileOps({OsFs? os, PlatformFs? platform, this.syncXattrs = false})
+      : _os = os ?? const OsFs(),
+        _platform = platform ?? const PlatformFs();
 
   /// Copy a file from source to destination using atomic temp+rename.
   ///
@@ -55,6 +62,11 @@ class FileOps {
       // Set properties if provided
       if (props != null) {
         _setProps(tempPath, props);
+      }
+
+      // Copy extended attributes from source
+      if (syncXattrs) {
+        _copyXattrs(srcFull, tempPath);
       }
 
       // Atomic rename to final destination
@@ -216,6 +228,29 @@ class FileOps {
     // Set permissions (Unix only)
     if (!Platform.isWindows) {
       _os.setPermissions(path, props.permissions);
+    }
+
+    // Set ownership (Unix only, if tracked)
+    if (props.ownerId >= 0 || props.groupId >= 0) {
+      _os.setOwnership(path, props.ownerId, props.groupId);
+    }
+  }
+
+  /// Copy all extended attributes from source to destination.
+  void _copyXattrs(String srcPath, String dstPath) {
+    try {
+      final names = _platform.listXattrs(srcPath);
+      for (final name in names) {
+        final value = _platform.getXattr(srcPath, name);
+        if (value != null) {
+          _platform.setXattr(dstPath, name, value);
+        }
+      }
+    } catch (e) {
+      Trace.debug(
+        TraceCategory.transport,
+        'Could not copy xattrs from $srcPath: $e',
+      );
     }
   }
 }

@@ -23,11 +23,19 @@ class Props {
   /// Not synced, only used for local change detection.
   final DateTime? ctime;
 
+  /// Owner user ID (Unix). -1 = not tracked.
+  final int ownerId;
+
+  /// Owner group ID (Unix). -1 = not tracked.
+  final int groupId;
+
   const Props({
     required this.permissions,
     required this.modTime,
     required this.length,
     this.ctime,
+    this.ownerId = -1,
+    this.groupId = -1,
   });
 
   /// Dummy props for absent/unknown entries.
@@ -107,12 +115,16 @@ class Props {
     DateTime? modTime,
     int? length,
     DateTime? ctime,
+    int? ownerId,
+    int? groupId,
   }) {
     return Props(
       permissions: permissions ?? this.permissions,
       modTime: modTime ?? this.modTime,
       length: length ?? this.length,
       ctime: ctime ?? this.ctime,
+      ownerId: ownerId ?? this.ownerId,
+      groupId: groupId ?? this.groupId,
     );
   }
 

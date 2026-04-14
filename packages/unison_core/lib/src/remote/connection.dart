@@ -64,6 +64,8 @@ class ConnectionManager {
   ///
   /// Spawns an SSH process running the Unison server on the remote side.
   /// Communication happens via the process's stdin/stdout.
+  /// If [onPasswordPrompt] is provided, stderr is monitored for password
+  /// requests and the callback is invoked to obtain the response.
   Future<RemoteConnection> connectByShell({
     String shell = 'ssh',
     required String host,
@@ -71,6 +73,7 @@ class ConnectionManager {
     int? port,
     String? sshArgs,
     required String remoteCommand,
+    Future<String> Function(String prompt)? onPasswordPrompt,
   }) async {
     final args = <String>[];
 
@@ -108,8 +111,8 @@ class ConnectionManager {
 
     final process = await Process.start(shell, args);
 
-    // Forward stderr
-    _forwardStderr(process.stderr);
+    // Monitor stderr for password prompts and error messages
+    _monitorStderr(process.stderr, process.stdin, onPasswordPrompt);
 
     return RemoteConnection(
       input: process.stdout,
@@ -161,11 +164,31 @@ class ConnectionManager {
     return (conn1, conn2);
   }
 
-  void _forwardStderr(Stream<List<int>> stderr) {
+  /// Monitor stderr for password prompts and forward other messages.
+  void _monitorStderr(
+    Stream<List<int>> stderr,
+    IOSink processStdin,
+    Future<String> Function(String prompt)? onPasswordPrompt,
+  ) {
     stderr.listen(
       (data) {
         final msg = String.fromCharCodes(data).trim();
-        if (msg.isNotEmpty) {
+        if (msg.isEmpty) return;
+
+        // Detect password/passphrase prompts
+        final lower = msg.toLowerCase();
+        if (onPasswordPrompt != null &&
+            (lower.contains('password') ||
+             lower.contains('passphrase') ||
+             lower.contains('authentication') ||
+             lower.endsWith(':'))) {
+          // Ask user for password and send to SSH stdin
+          onPasswordPrompt(msg).then((response) {
+            processStdin.writeln(response);
+          }).catchError((_) {
+            Trace.warning(TraceCategory.remote, 'Password prompt cancelled');
+          });
+        } else {
           Trace.warning(TraceCategory.remote, 'Remote stderr: $msg');
         }
       },

@@ -161,6 +161,23 @@ class OsFs {
     }
   }
 
+  /// Set file ownership (Unix only, requires appropriate privileges).
+  /// [ownerId] and [groupId] of -1 means "don't change".
+  void setOwnership(String path, int ownerId, int groupId) {
+    if (Platform.isWindows) return;
+    if (ownerId == -1 && groupId == -1) return;
+
+    final ownerStr = ownerId >= 0 ? '$ownerId' : '';
+    final groupStr = groupId >= 0 ? '$groupId' : '';
+    if (ownerStr.isEmpty && groupStr.isEmpty) return;
+
+    try {
+      Process.runSync('chown', ['$ownerStr:$groupStr', path]);
+    } catch (e) {
+      Trace.debug(TraceCategory.general, 'chown failed for $path: $e');
+    }
+  }
+
   static String _basename(String path) {
     var p = path.replaceAll('\\', '/');
     if (p.endsWith('/')) p = p.substring(0, p.length - 1);

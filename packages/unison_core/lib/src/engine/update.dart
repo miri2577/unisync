@@ -6,6 +6,7 @@
 library;
 
 import 'dart:collection';
+import 'dart:io';
 
 import '../fingerprint/fingerprint_service.dart';
 import '../fingerprint/fpcache.dart';
@@ -32,10 +33,16 @@ class UpdateConfig {
   /// Predicate to check if a path should be ignored.
   final bool Function(SyncPath path)? shouldIgnore;
 
+  /// Predicate for symlinks that should be followed transparently.
+  /// When a symlink matches, it is treated as the target (file/dir)
+  /// rather than as a symlink. Cycle detection prevents infinite loops.
+  final bool Function(SyncPath path)? shouldFollow;
+
   const UpdateConfig({
     this.useFastCheck = true,
     this.fatTolerance = false,
     this.shouldIgnore,
+    this.shouldFollow,
   });
 }
 
@@ -89,7 +96,15 @@ class UpdateDetector {
       return (const NoUpdates(), archive);
     }
 
-    final info = _fileinfoService.get(root, path);
+    var info = _fileinfoService.get(root, path);
+
+    // Symlink following: if the path is a symlink and shouldFollow matches,
+    // resolve the target and treat it as the target type instead.
+    if (info.typ == FileType.symlink &&
+        config.shouldFollow != null &&
+        config.shouldFollow!(path)) {
+      info = _resolveSymlink(root, path, info);
+    }
 
     return switch ((info.typ, archive)) {
       // Both absent — nothing to do
@@ -405,6 +420,50 @@ class UpdateDetector {
   /// Sorted merge of two sorted name lists.
   ///
   /// Check if a directory's children list matches the archive exactly.
+  /// Resolve a symlink to its target's Fileinfo.
+  /// Follows up to 100 levels deep to detect cycles.
+  Fileinfo _resolveSymlink(Fspath root, SyncPath path, Fileinfo symlinkInfo) {
+    final visited = <String>{};
+    var currentPath = root.concat(path).toLocal();
+
+    for (var i = 0; i < 100; i++) {
+      if (visited.contains(currentPath)) {
+        Trace.warning(
+          TraceCategory.update,
+          'Symlink cycle detected at $path',
+        );
+        return symlinkInfo; // Return as symlink, don't follow
+      }
+      visited.add(currentPath);
+
+      try {
+        final target = Link(currentPath).targetSync();
+        // Resolve relative targets
+        final resolvedTarget = File(target).existsSync()
+            ? target
+            : '${File(currentPath).parent.path}/$target';
+
+        final type = FileSystemEntity.typeSync(resolvedTarget, followLinks: false);
+        if (type == FileSystemEntityType.link) {
+          currentPath = resolvedTarget;
+          continue; // Follow chain
+        }
+
+        // Got the real target — stat it
+        return _fileinfoService.getAbsolute(resolvedTarget);
+      } catch (e) {
+        Trace.warning(
+          TraceCategory.update,
+          'Cannot resolve symlink $path: $e',
+        );
+        return symlinkInfo;
+      }
+    }
+
+    Trace.warning(TraceCategory.update, 'Symlink chain too deep at $path');
+    return symlinkInfo;
+  }
+
   bool _childrenListUnchanged(List<Name> fsChildren, List<Name> archiveNames) {
     if (fsChildren.length != archiveNames.length) return false;
     for (var i = 0; i < fsChildren.length; i++) {
