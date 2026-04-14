@@ -1,5 +1,6 @@
 import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../state/settings_state.dart';
 import '../state/sync_state.dart';
@@ -230,19 +231,54 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('UniSync', style: theme.typography.subtitle),
-        const SizedBox(height: 8),
+        Text('UniSync', style: theme.typography.titleLarge),
+        const SizedBox(height: 4),
         Text('Bidirectional File Synchronizer', style: theme.typography.body),
         const SizedBox(height: 24),
         _info('Version', '0.1.0'),
         _info('Engine', 'unison_core (Dart)'),
-        _info('Protocol', 'v1'),
-        _info('Tests', '326 passing'),
+        _info('Protocol', 'v2'),
+        _info('Tests', '338 passing'),
+        _info('License', 'GPLv3'),
         const SizedBox(height: 24),
+        Text('Developer', style: theme.typography.bodyStrong),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Icon(FluentIcons.contact, size: 16),
+            const SizedBox(width: 8),
+            Text('Mirko Richter', style: theme.typography.body),
+          ],
+        ),
+        const SizedBox(height: 8),
+        HyperlinkButton(
+          onPressed: () => launchUrl(Uri.parse('https://github.com/miri2577/unisync')),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(FluentIcons.open_source, size: 14),
+              SizedBox(width: 6),
+              Text('github.com/miri2577/unisync'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        Text('Credits', style: theme.typography.bodyStrong),
+        const SizedBox(height: 8),
         Text(
-          'Inspired by Unison by Benjamin C. Pierce et al.\n'
-          'github.com/bcpierce00/unison\n\n'
-          'UniSync is a clean-room reimplementation in Dart/Flutter.',
+          'Inspired by Unison File Synchronizer\n'
+          'by Benjamin C. Pierce et al.',
+          style: theme.typography.body,
+        ),
+        const SizedBox(height: 4),
+        HyperlinkButton(
+          onPressed: () => launchUrl(Uri.parse('https://github.com/bcpierce00/unison')),
+          child: const Text('github.com/bcpierce00/unison'),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          'UniSync is a clean-room reimplementation in Dart/Flutter.\n'
+          'No source code is shared with the original OCaml implementation.',
           style: theme.typography.caption,
         ),
       ],

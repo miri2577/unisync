@@ -12,6 +12,7 @@ dependencies:
   fluent_ui: ^4.11.1
   flutter_riverpod: ^2.6.1
   file_picker: ^11.0.2
+  url_launcher: ^6.3.1
   unison_core:
     path: ../packages/unison_core
 

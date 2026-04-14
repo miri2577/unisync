@@ -39,22 +39,41 @@ class WebDavSyncEngine {
   /// Fake Fspath for the WebDAV root (used as archive key).
   final Fspath _webdavRootKey;
 
+  /// Remote base path prefix (e.g. "UniSync/my-profile/").
+  final String _remotePrefix;
+
   WebDavSyncEngine({
     required Fspath localRoot,
     required WebDavClient webdav,
+    String? profileName,
     ArchiveStore? archiveStore,
   })  : _localRoot = localRoot,
         _webdav = webdav,
         _archiveStore = archiveStore ?? ArchiveStore(ArchiveStore.defaultArchiveDir()),
         _fpCache = FpCache(),
+        _remotePrefix = 'UniSync/${profileName ?? "default"}/',
         _webdavRootKey = Fspath.fromLocal(
           Platform.isWindows ? 'C:/webdav/${webdav.config.baseUrl.hashCode}' : '/webdav/${webdav.config.baseUrl.hashCode}',
         );
 
+  /// Convert a sync path to the remote WebDAV path with prefix.
+  String _remotePath(SyncPath path) {
+    final rel = path.toString();
+    if (rel.isEmpty) return _remotePrefix;
+    return '$_remotePrefix$rel';
+  }
+
   /// Run a full sync: local <-> WebDAV.
+  ///
+  /// Files are stored on the WebDAV server under `UniSync/<profileName>/`
+  /// to keep them separate from other data.
   Future<SyncResult> sync({
     SyncProgressCallback? onProgress,
   }) async {
+    // Phase 0: Ensure remote prefix directory exists
+    onProgress?.call(SyncPhase.scanning, 'Preparing remote directory...');
+    await _webdav.mkdirRecursive(_remotePrefix);
+
     // Phase 1: Load archive
     onProgress?.call(SyncPhase.scanning, 'Loading archive...');
     final archive = _archiveStore.load(_localRoot, _webdavRootKey);
@@ -63,7 +82,7 @@ class WebDavSyncEngine {
     onProgress?.call(SyncPhase.scanning, 'Scanning local files...');
     final localUpdates = _scanLocal(archive);
 
-    // Phase 3: Scan WebDAV
+    // Phase 3: Scan WebDAV (within prefix)
     onProgress?.call(SyncPhase.scanning, 'Scanning remote (WebDAV)...');
     final webdavUpdates = await _scanWebDav(archive, SyncPath.empty);
 
@@ -119,7 +138,7 @@ class WebDavSyncEngine {
   /// Scan WebDAV server against archive.
   Future<UpdateItem> _scanWebDav(Archive archive, SyncPath path) async {
     try {
-      final entries = await _webdav.listDirectory(path.toString());
+      final entries = await _webdav.listDirectory(_remotePath(path));
 
       if (archive case ArchiveDir(desc: var arDesc, children: var arChildren)) {
         // Compare WebDAV entries against archive
@@ -287,7 +306,7 @@ class WebDavSyncEngine {
 
   Future<void> _uploadToWebDav(SyncPath path, ReplicaContent source) async {
     if (source.status == ReplicaStatus.deleted) {
-      await _webdav.delete(path.toString());
+      await _webdav.delete(_remotePath(path));
       return;
     }
 
@@ -295,10 +314,10 @@ class WebDavSyncEngine {
       case FileContent():
         final localPath = _localRoot.concat(path).toLocal();
         final data = File(localPath).readAsBytesSync();
-        await _webdav.writeFileWithParents(path.toString(), data);
+        await _webdav.writeFileWithParents(_remotePath(path), data);
 
       case DirContent():
-        await _webdav.mkdirRecursive(path.toString());
+        await _webdav.mkdirRecursive(_remotePath(path));
 
       default:
         break;
@@ -317,7 +336,7 @@ class WebDavSyncEngine {
 
     switch (source.content) {
       case FileContent():
-        final data = await _webdav.readFile(path.toString());
+        final data = await _webdav.readFile(_remotePath(path));
         final localPath = _localRoot.concat(path).toLocal();
         final parent = File(localPath).parent;
         if (!parent.existsSync()) parent.createSync(recursive: true);
