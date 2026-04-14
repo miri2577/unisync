@@ -65,6 +65,11 @@ class UnisonPrefs {
   // -- Remote --
   late final Pref<String> serverCmd;
   late final Pref<String> sshCmd;
+
+  // -- WebDAV --
+  late final Pref<String> webdavUrl;
+  late final Pref<String> webdavUser;
+  late final Pref<String> webdavPass;
   late final Pref<String> sshArgs;
   late final Pref<bool> addVersionNo;
 
@@ -311,6 +316,23 @@ class UnisonPrefs {
     addVersionNo = registry.createBool(
       name: 'addversionno',
       doc: 'Append version number to remote command',
+      category: PrefCategory.remote,
+    );
+
+    // WebDAV
+    webdavUrl = registry.createString(
+      name: 'webdavurl',
+      doc: 'WebDAV server URL',
+      category: PrefCategory.remote,
+    );
+    webdavUser = registry.createString(
+      name: 'webdavuser',
+      doc: 'WebDAV username',
+      category: PrefCategory.remote,
+    );
+    webdavPass = registry.createString(
+      name: 'webdavpass',
+      doc: 'WebDAV password',
       category: PrefCategory.remote,
     );
 
