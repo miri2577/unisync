@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:unison_core/unison_core.dart';
 
+import 'settings_state.dart';
+
 /// Current sync operation phase.
 enum AppSyncPhase { idle, scanning, reconciling, propagating, done, error }
 
@@ -102,13 +104,17 @@ class SyncOperationState {
 /// Provider for the active sync operation.
 final syncOperationProvider =
     StateNotifierProvider<SyncOperationNotifier, SyncOperationState>((ref) {
-  return SyncOperationNotifier(ref.watch(profileDirProvider));
+  return SyncOperationNotifier(
+    ref.watch(profileDirProvider),
+    ref.watch(appSettingsProvider),
+  );
 });
 
 class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
   final String _profileDir;
+  final AppSettings _appSettings;
 
-  SyncOperationNotifier(this._profileDir)
+  SyncOperationNotifier(this._profileDir, this._appSettings)
       : super(const SyncOperationState());
 
   /// Start a sync for a profile. Returns the recon items for UI review.
@@ -145,20 +151,35 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
       final root1 = Fspath.fromLocal(prefs.root.value[0]);
       final root2 = Fspath.fromLocal(prefs.root.value[1]);
       final store = ArchiveStore(_profileDir);
-      final engine = SyncEngine(archiveStore: store);
+      store.recoverAll();
+
+      final transport = TransportOrchestrator(
+        maxThreads: _appSettings.maxThreads,
+        maxErrors: _appSettings.maxErrors,
+      );
+      final engine = SyncEngine(archiveStore: store, transport: transport);
 
       state = state.copyWith(message: 'Scanning...');
 
+      // Build ignore filter from app settings + profile
+      final allIgnore = [..._appSettings.ignorePatterns, ...prefs.ignore.value];
+      final ignoreFilter = allIgnore.isNotEmpty
+          ? IgnoreFilter(ignorePatterns: allIgnore)
+          : null;
+
       final updateConfig = UpdateConfig(
-        useFastCheck: prefs.fastCheck.value,
-        fatTolerance: prefs.fatFilesystem.value,
+        useFastCheck: _appSettings.fastCheck,
+        fatTolerance: _appSettings.fatFilesystem,
+        shouldIgnore: ignoreFilter != null
+            ? (p) => ignoreFilter.shouldIgnore(p)
+            : null,
       );
 
       final reconConfig = ReconConfig(
-        preferNewer: prefs.preferNewer.value,
-        noDeletion: prefs.noDeletion.value,
-        noUpdate: prefs.noUpdate.value,
-        noCreation: prefs.noCreation.value,
+        preferNewer: _appSettings.preferNewer,
+        noDeletion: _appSettings.noDeletion,
+        noUpdate: _appSettings.noUpdate,
+        noCreation: _appSettings.noCreation,
       );
 
       final result = engine.sync(

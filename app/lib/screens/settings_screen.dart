@@ -1,6 +1,7 @@
 import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../state/settings_state.dart';
 import '../state/sync_state.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -12,17 +13,24 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   int _selectedSection = 0;
+  final _patternController = TextEditingController();
+
+  @override
+  void dispose() {
+    _patternController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = FluentTheme.of(context);
+    final settings = ref.watch(appSettingsProvider);
     final profileDir = ref.watch(profileDirProvider);
 
     return ScaffoldPage(
       header: const PageHeader(title: Text('Settings')),
       content: Row(
         children: [
-          // Section list
           SizedBox(
             width: 200,
             child: ListView(
@@ -36,17 +44,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ],
             ),
           ),
-          // Divider
           Container(width: 1, color: theme.resources.dividerStrokeColorDefault),
-          // Content
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: switch (_selectedSection) {
-                0 => _buildGeneral(profileDir, theme),
-                1 => _buildSync(theme),
-                2 => _buildFilters(theme),
-                3 => _buildRemote(theme),
+                0 => _buildGeneral(settings, profileDir, theme),
+                1 => _buildSync(settings, theme),
+                2 => _buildFilters(settings, theme),
+                3 => _buildRemote(settings, theme),
                 4 => _buildAbout(theme),
                 _ => const SizedBox(),
               },
@@ -58,116 +64,144 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Widget _sectionTile(int index, IconData icon, String label) {
-    final isSelected = _selectedSection == index;
     return ListTile.selectable(
       leading: Icon(icon, size: 16),
       title: Text(label),
-      selected: isSelected,
+      selected: _selectedSection == index,
       onPressed: () => setState(() => _selectedSection = index),
     );
   }
 
-  Widget _buildGeneral(String profileDir, FluentThemeData theme) {
+  void _update(AppSettings Function(AppSettings) fn) {
+    ref.read(appSettingsProvider.notifier).update(fn);
+  }
+
+  Widget _buildGeneral(AppSettings s, String profileDir, FluentThemeData theme) {
     return ListView(
       children: [
         Text('General', style: theme.typography.subtitle),
         const SizedBox(height: 16),
         InfoLabel(
           label: 'Profile Directory',
-          child: TextBox(
-            readOnly: true,
-            controller: TextEditingController(text: profileDir),
-          ),
-        ),
-        const SizedBox(height: 16),
-        InfoLabel(
-          label: 'Theme',
-          child: ComboBox<String>(
-            value: 'System',
-            items: const [
-              ComboBoxItem(value: 'System', child: Text('System')),
-              ComboBoxItem(value: 'Light', child: Text('Light')),
-              ComboBoxItem(value: 'Dark', child: Text('Dark')),
-            ],
-            onChanged: (_) {},
-          ),
+          child: TextBox(readOnly: true, controller: TextEditingController(text: profileDir)),
         ),
         const SizedBox(height: 16),
         InfoLabel(
           label: 'Max Concurrent Transfers',
           child: NumberBox<int>(
-            value: 20,
+            value: s.maxThreads,
             min: 1,
             max: 100,
-            onChanged: (_) {},
+            onChanged: (v) => _update((s) => s.copyWith(maxThreads: v ?? 20)),
           ),
         ),
         const SizedBox(height: 16),
         InfoLabel(
           label: 'Max Errors Before Abort (-1 = never)',
           child: NumberBox<int>(
-            value: -1,
+            value: s.maxErrors,
             min: -1,
             max: 1000,
-            onChanged: (_) {},
+            onChanged: (v) => _update((s) => s.copyWith(maxErrors: v ?? -1)),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildSync(FluentThemeData theme) {
+  Widget _buildSync(AppSettings s, FluentThemeData theme) {
     return ListView(
       children: [
         Text('Sync Behavior', style: theme.typography.subtitle),
         const SizedBox(height: 16),
-        _toggleRow('Fast Check (skip fingerprint if mtime+size unchanged)', true),
-        _toggleRow('Preserve Modification Times', true),
-        _toggleRow('Sync Symbolic Links', true),
-        _toggleRow('FAT Filesystem Tolerance (2-second granularity)', false),
-        _toggleRow('Confirm Large Deletions', true),
+        _toggle('Fast Check (skip fingerprint if mtime+size unchanged)', s.fastCheck,
+            (v) => _update((s) => s.copyWith(fastCheck: v))),
+        _toggle('Preserve Modification Times', s.times,
+            (v) => _update((s) => s.copyWith(times: v))),
+        _toggle('Sync Symbolic Links', s.links,
+            (v) => _update((s) => s.copyWith(links: v))),
+        _toggle('FAT Filesystem Tolerance', s.fatFilesystem,
+            (v) => _update((s) => s.copyWith(fatFilesystem: v))),
+        _toggle('Confirm Large Deletions', s.confirmBigDeletes,
+            (v) => _update((s) => s.copyWith(confirmBigDeletes: v))),
+        _toggle('Sync Extended Attributes', s.syncXattrs,
+            (v) => _update((s) => s.copyWith(syncXattrs: v))),
         const SizedBox(height: 24),
         Text('Conflict Resolution', style: theme.typography.bodyStrong),
         const SizedBox(height: 8),
-        _toggleRow('Prefer Newer File', false),
-        _toggleRow('Prevent Deletions', false),
-        _toggleRow('Prevent New File Creation', false),
-        _toggleRow('Prevent Content Updates', false),
+        _toggle('Prefer Newer File', s.preferNewer,
+            (v) => _update((s) => s.copyWith(preferNewer: v))),
+        _toggle('Prevent Deletions', s.noDeletion,
+            (v) => _update((s) => s.copyWith(noDeletion: v))),
+        _toggle('Prevent New File Creation', s.noCreation,
+            (v) => _update((s) => s.copyWith(noCreation: v))),
+        _toggle('Prevent Content Updates', s.noUpdate,
+            (v) => _update((s) => s.copyWith(noUpdate: v))),
       ],
     );
   }
 
-  Widget _buildFilters(FluentThemeData theme) {
+  Widget _buildFilters(AppSettings s, FluentThemeData theme) {
     return ListView(
       children: [
         Text('Ignore Patterns', style: theme.typography.subtitle),
-        const SizedBox(height: 16),
-        Text(
-          'Files matching these patterns will be excluded from sync.',
-          style: theme.typography.body,
-        ),
+        const SizedBox(height: 8),
+        Text('Files matching these patterns are excluded from sync.',
+            style: theme.typography.body),
         const SizedBox(height: 12),
-        _patternRow('Name *.tmp'),
-        _patternRow('Name .DS_Store'),
-        _patternRow('Name {.git,.svn}'),
-        _patternRow('Path node_modules'),
-        const SizedBox(height: 12),
-        Button(
-          onPressed: () {},
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(FluentIcons.add, size: 12),
-              SizedBox(width: 6),
-              Text('Add Pattern'),
-            ],
+        for (var i = 0; i < s.ignorePatterns.length; i++)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              children: [
+                const Icon(FluentIcons.filter, size: 12),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(s.ignorePatterns[i],
+                      style: const TextStyle(fontFamily: 'Consolas')),
+                ),
+                IconButton(
+                  icon: const Icon(FluentIcons.delete, size: 12),
+                  onPressed: () =>
+                      ref.read(appSettingsProvider.notifier).removeIgnorePattern(i),
+                ),
+              ],
+            ),
           ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: TextBox(
+                controller: _patternController,
+                placeholder: 'Name *.tmp',
+              ),
+            ),
+            const SizedBox(width: 8),
+            Button(
+              onPressed: () {
+                final p = _patternController.text.trim();
+                if (p.isNotEmpty) {
+                  ref.read(appSettingsProvider.notifier).addIgnorePattern(p);
+                  _patternController.clear();
+                }
+              },
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(FluentIcons.add, size: 12),
+                  SizedBox(width: 4),
+                  Text('Add'),
+                ],
+              ),
+            ),
+          ],
         ),
       ],
     );
   }
 
-  Widget _buildRemote(FluentThemeData theme) {
+  Widget _buildRemote(AppSettings s, FluentThemeData theme) {
     return ListView(
       children: [
         Text('Remote Connection', style: theme.typography.subtitle),
@@ -175,18 +209,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         InfoLabel(
           label: 'SSH Command',
           child: TextBox(
-            controller: TextEditingController(text: 'ssh'),
+            controller: TextEditingController(text: s.sshCmd),
+            onChanged: (v) => _update((s) => s.copyWith(sshCmd: v)),
           ),
         ),
         const SizedBox(height: 16),
         InfoLabel(
           label: 'Additional SSH Arguments',
-          child: const TextBox(placeholder: '-o StrictHostKeyChecking=no'),
-        ),
-        const SizedBox(height: 16),
-        InfoLabel(
-          label: 'Remote Unison Command',
-          child: const TextBox(placeholder: 'unison'),
+          child: TextBox(
+            controller: TextEditingController(text: s.sshArgs),
+            placeholder: '-o StrictHostKeyChecking=no',
+            onChanged: (v) => _update((s) => s.copyWith(sshArgs: v)),
+          ),
         ),
       ],
     );
@@ -196,66 +230,43 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Unison File Synchronizer', style: theme.typography.subtitle),
+        Text('UniSync', style: theme.typography.subtitle),
         const SizedBox(height: 8),
-        Text('Dart/Flutter Implementation', style: theme.typography.body),
+        Text('Bidirectional File Synchronizer', style: theme.typography.body),
         const SizedBox(height: 24),
-        _infoRow('Version', '0.1.0'),
-        _infoRow('Engine', 'unison_core'),
-        _infoRow('Protocol Version', '1'),
-        _infoRow('Tests', '326 passing'),
-        _infoRow('Source Files', '49'),
+        _info('Version', '0.1.0'),
+        _info('Engine', 'unison_core (Dart)'),
+        _info('Protocol', 'v1'),
+        _info('Tests', '326 passing'),
         const SizedBox(height: 24),
         Text(
-          'Based on Unison by Benjamin C. Pierce et al.\n'
-          'Original: github.com/bcpierce00/unison\n'
-          'This implementation: Pure Dart/Flutter rewrite.',
+          'Inspired by Unison by Benjamin C. Pierce et al.\n'
+          'github.com/bcpierce00/unison\n\n'
+          'UniSync is a clean-room reimplementation in Dart/Flutter.',
           style: theme.typography.caption,
         ),
       ],
     );
   }
 
-  Widget _toggleRow(String label, bool initialValue) {
+  Widget _toggle(String label, bool value, ValueChanged<bool> onChanged) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         children: [
           Expanded(child: Text(label)),
-          ToggleSwitch(
-            checked: initialValue,
-            onChanged: (_) {},
-          ),
+          ToggleSwitch(checked: value, onChanged: onChanged),
         ],
       ),
     );
   }
 
-  Widget _patternRow(String pattern) {
+  Widget _info(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
-          const Icon(FluentIcons.filter, size: 12),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(pattern, style: const TextStyle(fontFamily: 'Consolas')),
-          ),
-          IconButton(
-            icon: const Icon(FluentIcons.delete, size: 12),
-            onPressed: () {},
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _infoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          SizedBox(width: 140, child: Text(label)),
+          SizedBox(width: 120, child: Text(label)),
           Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
         ],
       ),

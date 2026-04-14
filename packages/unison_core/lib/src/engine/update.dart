@@ -313,15 +313,15 @@ class UpdateDetector {
   /// Path was deleted (exists in archive but not on disk).
   (UpdateItem, Archive) _updateDeleted(Archive archived) {
     final prevState = switch (archived) {
-      ArchiveDir(desc: var d) => PrevDir(d),
+      ArchiveDir(desc: var d) => PrevDir(d) as PrevState,
       ArchiveFile(desc: var d, fingerprint: var fp, stamp: var s, ressStamp: var r) =>
-        PrevFile(d, fp, s, r),
-      ArchiveSymlink() => const PrevSymlink(),
-      NoArchive() => const NewEntry(),
+        PrevFile(d, fp, s, r) as PrevState,
+      ArchiveSymlink() => const PrevSymlink() as PrevState,
+      NoArchive() => const NewEntry() as PrevState,
     };
 
     return (
-      const Updates(Absent(), NewEntry()),
+      Updates(const Absent(), prevState),
       const NoArchive(),
     );
   }

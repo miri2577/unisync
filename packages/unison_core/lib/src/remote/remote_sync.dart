@@ -16,6 +16,7 @@ import '../fs/fileinfo_service.dart';
 import '../fs/os.dart';
 import '../model/archive.dart';
 import '../model/fileinfo.dart';
+import '../model/fingerprint.dart';
 import '../model/fspath.dart';
 import '../model/name.dart';
 import '../model/props.dart';
@@ -428,52 +429,185 @@ Future<void> runServer(Fspath root) async {
 // UpdateItem serialization (simplified)
 // ---------------------------------------------------------------------------
 
+// UpdateItem tag constants
 const _tagNoUpdates = 0;
 const _tagUpdates = 1;
 const _tagUpdateError = 2;
+// UpdateContent tag constants
+const _tagAbsent = 0;
+const _tagFileContent = 1;
+const _tagDirContent = 2;
+const _tagSymlinkContent = 3;
+// ContentsChange tag constants
+const _tagContentsSame = 0;
+const _tagContentsUpdated = 1;
+// PrevState tag constants
+const _tagPrevDir = 0;
+const _tagPrevFile = 1;
+const _tagPrevSymlink = 2;
+const _tagNewEntry = 3;
 
 void _encodeUpdateItem(MarshalEncoder enc, UpdateItem item) {
   switch (item) {
     case NoUpdates():
       enc.writeTag(_tagNoUpdates);
-    case Updates(content: var content, prevState: _):
+    case Updates(content: var content, prevState: var prev):
       enc.writeTag(_tagUpdates);
-      enc.writeString(_updateContentType(content));
-      enc.writeInt64(_updateContentSize(content));
+      _encodeUpdateContent(enc, content);
+      _encodePrevState(enc, prev);
     case UpdateError(message: var msg):
       enc.writeTag(_tagUpdateError);
       enc.writeString(msg);
   }
 }
 
+void _encodeUpdateContent(MarshalEncoder enc, UpdateContent content) {
+  switch (content) {
+    case Absent():
+      enc.writeTag(_tagAbsent);
+    case FileContent(desc: var desc, contentsChange: var cc):
+      enc.writeTag(_tagFileContent);
+      _encodeProps(enc, desc);
+      _encodeContentsChange(enc, cc);
+    case DirContent(desc: var desc, children: var ch, permChange: var pc, isEmpty: var empty):
+      enc.writeTag(_tagDirContent);
+      _encodeProps(enc, desc);
+      enc.writeInt(pc == PermChange.propsUpdated ? 1 : 0);
+      enc.writeBool(empty);
+      enc.writeInt(ch.length);
+      for (final (name, child) in ch) {
+        enc.writeString(name.raw);
+        _encodeUpdateItem(enc, child);
+      }
+    case SymlinkContent(target: var target):
+      enc.writeTag(_tagSymlinkContent);
+      enc.writeString(target);
+  }
+}
+
+void _encodeContentsChange(MarshalEncoder enc, ContentsChange cc) {
+  switch (cc) {
+    case ContentsSame():
+      enc.writeTag(_tagContentsSame);
+    case ContentsUpdated(fingerprint: var fp, stamp: var stamp, ressStamp: var ress):
+      enc.writeTag(_tagContentsUpdated);
+      enc.writeByteArray(fp.dataFork.bytes);
+      enc.writeBool(fp.resourceFork != null);
+      if (fp.resourceFork != null) enc.writeByteArray(fp.resourceFork!.bytes);
+      enc.writeInt(ress.value);
+  }
+}
+
+void _encodePrevState(MarshalEncoder enc, PrevState prev) {
+  switch (prev) {
+    case PrevDir(desc: var d):
+      enc.writeTag(_tagPrevDir);
+      _encodeProps(enc, d);
+    case PrevFile(desc: var d, fingerprint: var fp, stamp: _, ressStamp: var r):
+      enc.writeTag(_tagPrevFile);
+      _encodeProps(enc, d);
+      enc.writeByteArray(fp.dataFork.bytes);
+      enc.writeInt(r.value);
+    case PrevSymlink():
+      enc.writeTag(_tagPrevSymlink);
+    case NewEntry():
+      enc.writeTag(_tagNewEntry);
+  }
+}
+
+void _encodeProps(MarshalEncoder enc, Props props) {
+  enc.writeInt(props.permissions);
+  enc.writeInt64(props.modTime.millisecondsSinceEpoch);
+  enc.writeInt64(props.length);
+  enc.writeSignedInt(props.ownerId);
+  enc.writeSignedInt(props.groupId);
+}
+
 UpdateItem _decodeUpdateItem(MarshalDecoder dec) {
   final tag = dec.readTag();
   return switch (tag) {
     _tagNoUpdates => const NoUpdates(),
-    _tagUpdates => _decodeUpdates(dec),
+    _tagUpdates => _decodeUpdatesImpl(dec),
     _tagUpdateError => UpdateError(dec.readString()),
     _ => throw FormatException('Unknown UpdateItem tag: $tag'),
   };
 }
 
-UpdateItem _decodeUpdates(MarshalDecoder dec) {
-  dec.readString(); // type
-  dec.readInt64(); // size
-  return const NoUpdates(); // Placeholder — full impl needs all fields
+UpdateItem _decodeUpdatesImpl(MarshalDecoder dec) {
+  final content = _decodeUpdateContent(dec);
+  final prev = _decodePrevState(dec);
+  return Updates(content, prev);
 }
 
-String _updateContentType(UpdateContent content) {
-  return switch (content) {
-    Absent() => 'absent',
-    FileContent() => 'file',
-    DirContent() => 'dir',
-    SymlinkContent() => 'symlink',
+UpdateContent _decodeUpdateContent(MarshalDecoder dec) {
+  final tag = dec.readTag();
+  return switch (tag) {
+    _tagAbsent => const Absent(),
+    _tagFileContent => _decodeFileContent(dec),
+    _tagDirContent => _decodeDirContent(dec),
+    _tagSymlinkContent => SymlinkContent(dec.readString()),
+    _ => throw FormatException('Unknown UpdateContent tag: $tag'),
   };
 }
 
-int _updateContentSize(UpdateContent content) {
-  return switch (content) {
-    FileContent(desc: var d) => d.length,
-    _ => 0,
+FileContent _decodeFileContent(MarshalDecoder dec) {
+  final desc = _decodeProps(dec);
+  final cc = _decodeContentsChange(dec);
+  return FileContent(desc, cc);
+}
+
+DirContent _decodeDirContent(MarshalDecoder dec) {
+  final desc = _decodeProps(dec);
+  final pc = dec.readInt() == 1 ? PermChange.propsUpdated : PermChange.propsSame;
+  final empty = dec.readBool();
+  final count = dec.readInt();
+  final children = <(Name, UpdateItem)>[];
+  for (var i = 0; i < count; i++) {
+    final name = Name(dec.readString());
+    final child = _decodeUpdateItem(dec);
+    children.add((name, child));
+  }
+  return DirContent(desc, children, pc, empty);
+}
+
+ContentsChange _decodeContentsChange(MarshalDecoder dec) {
+  final tag = dec.readTag();
+  if (tag == _tagContentsSame) return const ContentsSame();
+  final dataFp = Fingerprint(dec.readByteArray());
+  final hasRess = dec.readBool();
+  final ressFp = hasRess ? Fingerprint(dec.readByteArray()) : null;
+  final ressValue = dec.readInt();
+  return ContentsUpdated(
+    FullFingerprint(dataFp, ressFp),
+    const NoStamp(),
+    RessStamp(ressValue),
+  );
+}
+
+PrevState _decodePrevState(MarshalDecoder dec) {
+  final tag = dec.readTag();
+  return switch (tag) {
+    _tagPrevDir => PrevDir(_decodeProps(dec)),
+    _tagPrevFile => _decodePrevFile(dec),
+    _tagPrevSymlink => const PrevSymlink(),
+    _tagNewEntry => const NewEntry(),
+    _ => throw FormatException('Unknown PrevState tag: $tag'),
   };
+}
+
+PrevFile _decodePrevFile(MarshalDecoder dec) {
+  final desc = _decodeProps(dec);
+  final fp = Fingerprint(dec.readByteArray());
+  final ress = dec.readInt();
+  return PrevFile(desc, FullFingerprint(fp), const NoStamp(), RessStamp(ress));
+}
+
+Props _decodeProps(MarshalDecoder dec) {
+  return Props(
+    permissions: dec.readInt(),
+    modTime: DateTime.fromMillisecondsSinceEpoch(dec.readInt64()),
+    length: dec.readInt64(),
+    ownerId: dec.readSignedInt(),
+    groupId: dec.readSignedInt(),
+  );
 }

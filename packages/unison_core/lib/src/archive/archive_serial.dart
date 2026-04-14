@@ -107,16 +107,22 @@ void _writeProps(MarshalEncoder enc, Props props) {
   enc.writeInt(props.permissions);
   enc.writeInt64(props.modTime.millisecondsSinceEpoch);
   enc.writeInt64(props.length);
+  enc.writeSignedInt(props.ownerId);
+  enc.writeSignedInt(props.groupId);
 }
 
 Props _readProps(MarshalDecoder dec) {
   final permissions = dec.readInt();
   final modTimeMs = dec.readInt64();
   final length = dec.readInt64();
+  final ownerId = dec.readSignedInt();
+  final groupId = dec.readSignedInt();
   return Props(
     permissions: permissions,
     modTime: DateTime.fromMillisecondsSinceEpoch(modTimeMs),
     length: length,
+    ownerId: ownerId,
+    groupId: groupId,
   );
 }
 

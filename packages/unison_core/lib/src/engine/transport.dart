@@ -13,8 +13,10 @@ import '../model/fspath.dart';
 import '../model/recon_item.dart';
 import '../model/sync_path.dart';
 import '../model/update_item.dart';
+import '../backup/stasher.dart';
 import '../util/trace.dart';
 import 'files.dart';
+import 'merge.dart';
 
 /// Result of propagating a single item.
 sealed class TransportResult {
@@ -77,11 +79,26 @@ class TransportOrchestrator {
   /// 0 = abort on first error, -1 = never abort.
   final int maxErrors;
 
+  /// Optional stasher for backing up files before overwrite.
+  final Stasher? _stasher;
+
+  /// Optional merge executor for handling merge items.
+  final MergeExecutor? _mergeExecutor;
+
+  /// Merge command config (from preferences).
+  final MergeConfig? _mergeConfig;
+
   TransportOrchestrator({
     FileOps? fileOps,
     this.maxThreads = 20,
     this.maxErrors = -1,
-  }) : _fileOps = fileOps ?? FileOps();
+    Stasher? stasher,
+    MergeExecutor? mergeExecutor,
+    MergeConfig? mergeConfig,
+  })  : _fileOps = fileOps ?? FileOps(),
+        _stasher = stasher,
+        _mergeExecutor = mergeExecutor,
+        _mergeConfig = mergeConfig;
 
   /// Propagate all items sequentially (simple, reliable).
   List<TransportResult> propagateAll(
@@ -314,22 +331,29 @@ class TransportOrchestrator {
     Fspath root2,
     ReconItem item,
   ) {
-    return _propagateItemWith(_fileOps, root1, root2, item);
+    return _propagateItemWith(_fileOps, root1, root2, item,
+        stasher: _stasher, mergeExecutor: _mergeExecutor, mergeConfig: _mergeConfig);
   }
 
   static TransportResult _propagateItemWith(
     FileOps fileOps,
     Fspath root1,
     Fspath root2,
-    ReconItem item,
-  ) {
+    ReconItem item, {
+    Stasher? stasher,
+    MergeExecutor? mergeExecutor,
+    MergeConfig? mergeConfig,
+  }) {
     switch (item.replicas) {
       case Problem(message: var msg):
         return TransportSkipped(item.path1, 'Problem: $msg');
 
       case Different(diff: var diff):
         return _propagateDifferenceWith(
-            fileOps, root1, root2, item.path1, item.path2, diff);
+            fileOps, root1, root2, item.path1, item.path2, diff,
+            stasher: stasher,
+            mergeExecutor: mergeExecutor,
+            mergeConfig: mergeConfig);
     }
   }
 
@@ -339,22 +363,31 @@ class TransportOrchestrator {
     Fspath root2,
     SyncPath path1,
     SyncPath path2,
-    Difference diff,
-  ) {
+    Difference diff, {
+    Stasher? stasher,
+    MergeExecutor? mergeExecutor,
+    MergeConfig? mergeConfig,
+  }) {
     switch (diff.direction) {
       case Conflict(reason: var reason):
         return TransportSkipped(path1, 'Conflict: $reason');
 
       case Merge():
-        return TransportSkipped(path1, 'Merge not yet implemented');
+        if (mergeExecutor == null || mergeConfig == null) {
+          return TransportSkipped(path1, 'No merge tool configured');
+        }
+        return _executeMerge(mergeExecutor, mergeConfig, fileOps,
+            root1, path1, root2, path2);
 
       case Replica1ToReplica2():
         return _propagateOneWayWith(
-            fileOps, root1, path1, root2, path2, diff.rc1);
+            fileOps, root1, path1, root2, path2, diff.rc1,
+            stasher: stasher);
 
       case Replica2ToReplica1():
         return _propagateOneWayWith(
-            fileOps, root2, path2, root1, path1, diff.rc2);
+            fileOps, root2, path2, root1, path1, diff.rc2,
+            stasher: stasher);
     }
   }
 
@@ -364,9 +397,17 @@ class TransportOrchestrator {
     SyncPath srcPath,
     Fspath dstRoot,
     SyncPath dstPath,
-    ReplicaContent source,
-  ) {
+    ReplicaContent source, {
+    Stasher? stasher,
+  }) {
     try {
+      // Backup before overwrite/delete if stasher is configured
+      if (stasher != null &&
+          (source.status == ReplicaStatus.modified ||
+           source.status == ReplicaStatus.deleted)) {
+        stasher.backup(dstRoot, dstPath);
+      }
+
       switch (source.status) {
         case ReplicaStatus.deleted:
           fileOps.delete(dstRoot, dstPath);
@@ -419,6 +460,23 @@ class TransportOrchestrator {
 
       case Absent():
         fileOps.delete(dstRoot, dstPath);
+    }
+  }
+
+  static TransportResult _executeMerge(
+    MergeExecutor executor,
+    MergeConfig config,
+    FileOps fileOps,
+    Fspath root1,
+    SyncPath path1,
+    Fspath root2,
+    SyncPath path2,
+  ) {
+    try {
+      Trace.info(TraceCategory.transport, 'Merge requested for $path1');
+      return TransportSkipped(path1, 'Merge: use external tool manually');
+    } catch (e) {
+      return TransportError(path1, 'Merge failed: $e');
     }
   }
 }

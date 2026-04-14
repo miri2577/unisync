@@ -12,7 +12,7 @@ import 'name.dart';
 import 'props.dart';
 
 /// The archive format version. Increment when the serialization format changes.
-const archiveFormat = 1;
+const archiveFormat = 2;
 
 /// Sorted map of child names to archives.
 ///

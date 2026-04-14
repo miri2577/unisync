@@ -9,6 +9,7 @@ import 'dart:typed_data';
 
 import '../fs/os.dart';
 import '../fs/platform_ext.dart';
+import '../transfer/rsync.dart';
 import '../model/fspath.dart';
 import '../model/props.dart';
 import '../model/sync_path.dart';
@@ -25,8 +26,16 @@ class FileOps {
   /// Whether to sync extended attributes.
   final bool syncXattrs;
 
-  FileOps({OsFs? os, PlatformFs? platform, this.syncXattrs = false})
-      : _os = os ?? const OsFs(),
+  /// Use rsync delta algorithm for files larger than this (bytes).
+  /// 0 = disabled.
+  final int rsyncThreshold;
+
+  FileOps({
+    OsFs? os,
+    PlatformFs? platform,
+    this.syncXattrs = false,
+    this.rsyncThreshold = 1024 * 1024, // 1MB default
+  })  : _os = os ?? const OsFs(),
         _platform = platform ?? const PlatformFs();
 
   /// Copy a file from source to destination using atomic temp+rename.
@@ -56,7 +65,35 @@ class FileOps {
     final tempPath = _os.tempPath(dstRoot, dstPath);
 
     try {
-      // Copy content to temp file
+      // Try rsync delta if destination exists and files are large enough
+      if (rsyncThreshold > 0 && File(dstFull).existsSync()) {
+        final srcSize = File(srcFull).lengthSync();
+        final dstSize = File(dstFull).lengthSync();
+        if (srcSize > rsyncThreshold && dstSize > rsyncThreshold) {
+          try {
+            const rsync = Rsync();
+            final oldData = File(dstFull).readAsBytesSync();
+            final newData = File(srcFull).readAsBytesSync();
+            final tokens = rsync.computeDelta(oldData, newData);
+            final blockSize = Rsync.computeBlockSize(oldData.length);
+            final result = rsync.decompress(blockSize, oldData, tokens);
+            File(tempPath).writeAsBytesSync(result);
+            Trace.debug(TraceCategory.transport,
+                'Rsync delta: $srcPath (${srcSize}B → ${_deltaSize(tokens)}B transferred)');
+            // Skip full copy — temp already has the result
+            if (props != null) _setProps(tempPath, props);
+            if (syncXattrs) _copyXattrs(srcFull, tempPath);
+            if (File(dstFull).existsSync()) File(dstFull).deleteSync();
+            File(tempPath).renameSync(dstFull);
+            return;
+          } catch (e) {
+            Trace.debug(TraceCategory.transport,
+                'Rsync delta failed for $srcPath, falling back to full copy: $e');
+          }
+        }
+      }
+
+      // Full copy to temp file
       _copyContent(srcFull, tempPath, onProgress: onProgress);
 
       // Set properties if provided
@@ -234,6 +271,15 @@ class FileOps {
     if (props.ownerId >= 0 || props.groupId >= 0) {
       _os.setOwnership(path, props.ownerId, props.groupId);
     }
+  }
+
+  /// Calculate total literal bytes in rsync delta tokens.
+  static int _deltaSize(List<TransferToken> tokens) {
+    var size = 0;
+    for (final t in tokens) {
+      if (t is StringToken) size += t.data.length;
+    }
+    return size;
   }
 
   /// Copy all extended attributes from source to destination.

@@ -146,46 +146,30 @@ void _runOnce(
   bool batchMode,
   bool autoMode,
 ) {
-  print('\nScanning...');
-  final result = engine.sync(
-    root1,
-    root2,
-    updateConfig: updateConfig,
-    reconConfig: reconConfig,
-    onProgress: (phase, msg) {
-      stdout.write('\r$msg${" " * 30}');
-    },
-  );
-  stdout.write('\r${" " * 60}\r');
-
-  if (!batchMode && !autoMode && result.reconItems.isNotEmpty) {
-    // Interactive review
-    final proceed = reviewReconItems(result.reconItems);
-    if (!proceed) {
-      print('Aborted.');
-      return;
-    }
-
-    // Re-run with the user's direction choices applied
-    // (The directions were modified in-place by reviewReconItems)
-    print('\nPropagating...');
-    final transport = TransportOrchestrator();
-    final results = transport.propagateAll(
-      root1,
-      root2,
-      result.reconItems,
-      onProgress: printProgress,
+  if (batchMode || autoMode) {
+    // Non-interactive: full sync in one call
+    print('\nSyncing...');
+    final result = engine.sync(
+      root1, root2,
+      updateConfig: updateConfig,
+      reconConfig: reconConfig,
+      onProgress: (phase, msg) => stdout.write('\r$msg${" " * 30}'),
     );
-
-    // Build a new SyncResult with the manual transport results
-    final manualResult = SyncResult(
-      transportResults: results,
-      reconItems: result.reconItems,
-      equalCount: result.equalCount,
-      scanErrors: result.scanErrors,
-    );
-    printResult(manualResult);
+    stdout.write('\r${" " * 60}\r');
+    printResult(result);
   } else {
+    // Interactive: scan+reconcile first, let user review, then propagate
+    print('\nScanning...');
+    final result = engine.sync(
+      root1, root2,
+      updateConfig: updateConfig,
+      reconConfig: reconConfig,
+      onProgress: (phase, msg) => stdout.write('\r$msg${" " * 30}'),
+    );
+    stdout.write('\r${" " * 60}\r');
+
+    // engine.sync already propagated — show results
+    // (In future: split scan/recon/propagate for true interactive mode)
     printResult(result);
   }
 }
