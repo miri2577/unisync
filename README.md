@@ -56,7 +56,7 @@ The computed actions are executed: files are copied, deleted, or have their prop
 - **Error recovery** — configurable error tolerance; sync continues past individual file failures
 - **Path-specific rules** — different sync strategies for different subdirectories
 
-### Usage
+### Usage — Desktop App (GUI)
 
 1. Launch UniSync
 2. Click **"New Profile"** to create a sync configuration
@@ -65,6 +65,60 @@ The computed actions are executed: files are copied, deleted, or have their prop
 5. Review the change list — each item shows what changed and in which direction
 6. Click direction arrows to override individual items, or use batch buttons for bulk operations
 7. Changes are propagated and the archive is updated for next time
+
+### Usage — Command Line (CLI)
+
+UniSync also includes a standalone CLI for headless/server environments:
+
+```bash
+# Sync two directories directly
+unisync C:\Docs D:\Backup
+
+# Sync using a saved profile
+unisync my-documents
+
+# Batch mode — no prompts, skip conflicts
+unisync --batch my-documents
+
+# Watch mode — continuous sync on file changes
+unisync --watch my-documents
+
+# Repeat mode — sync every 60 seconds
+unisync --repeat 60 my-documents
+
+# List available profiles
+unisync --list
+
+# Run as remote server
+unisync --server /data/sync
+
+# With options
+unisync --maxthreads 50 --ignore "Name *.tmp" --prefer newer C:\A D:\B
+```
+
+**Interactive commands** during sync review:
+
+| Key | Action |
+|-----|--------|
+| `>` `.` | Set direction: replica 1 to 2 |
+| `<` `,` | Set direction: replica 2 to 1 |
+| `/` | Skip this item |
+| `m` | Mark for merge |
+| `d` | Show item details |
+| `A` | Accept all defaults |
+| `1` | Set all to replica 1 → 2 |
+| `2` | Set all to replica 2 → 1 |
+| `C` | Skip all conflicts |
+| `R` | Revert all to defaults |
+| `g` | Go — execute propagation |
+| `q` | Quit without syncing |
+
+**Build the CLI binary:**
+
+```bash
+cd cli
+dart compile exe bin/unisync.dart -o unisync.exe
+```
 
 ### Profile Configuration
 
@@ -112,6 +166,10 @@ app/                     Flutter desktop application
   screens/               Profile list, sync view, settings
   widgets/               Recon item tiles, direction indicators
   state/                 Riverpod state management
+cli/                     Command-line interface (standalone native binary)
+  bin/unisync.dart         Entry point with argument parsing
+  lib/cli_sync.dart        Sync orchestration (batch, watch, repeat, server)
+  lib/cli_ui.dart          Interactive TUI with ANSI colors
 ```
 
 ### Building from Source
@@ -202,7 +260,7 @@ Die berechneten Aktionen werden ausgefuehrt: Dateien werden kopiert, geloescht o
 - **Fehlertoleranz** — konfigurierbare Fehlergrenze; Sync laeuft bei einzelnen Dateifehlern weiter
 - **Pfad-spezifische Regeln** — verschiedene Sync-Strategien fuer verschiedene Unterverzeichnisse
 
-### Benutzung
+### Benutzung — Desktop App (GUI)
 
 1. UniSync starten
 2. **"New Profile"** klicken, um ein Sync-Profil zu erstellen
@@ -211,6 +269,57 @@ Die berechneten Aktionen werden ausgefuehrt: Dateien werden kopiert, geloescht o
 5. Aenderungsliste pruefen — jedes Element zeigt, was sich geaendert hat und in welche Richtung
 6. Richtungspfeile klicken fuer einzelne Aenderungen, oder Batch-Buttons fuer Massenoperationen
 7. Aenderungen werden ausgefuehrt und das Archiv fuer den naechsten Sync aktualisiert
+
+### Benutzung — Kommandozeile (CLI)
+
+UniSync bietet auch ein eigenstaendiges CLI fuer Server/Headless-Umgebungen:
+
+```bash
+# Zwei Verzeichnisse direkt synchronisieren
+unisync C:\Docs D:\Backup
+
+# Mit gespeichertem Profil synchronisieren
+unisync mein-profil
+
+# Batch-Modus — keine Rueckfragen, Konflikte ueberspringen
+unisync --batch mein-profil
+
+# Watch-Modus — automatischer Sync bei Dateiänderungen
+unisync --watch mein-profil
+
+# Repeat-Modus — alle 60 Sekunden synchronisieren
+unisync --repeat 60 mein-profil
+
+# Profile auflisten
+unisync --list
+
+# Als Remote-Server starten
+unisync --server /data/sync
+```
+
+**Interaktive Befehle** waehrend der Sync-Pruefung:
+
+| Taste | Aktion |
+|-------|--------|
+| `>` `.` | Richtung: Replica 1 nach 2 |
+| `<` `,` | Richtung: Replica 2 nach 1 |
+| `/` | Element ueberspringen |
+| `m` | Zum Merge markieren |
+| `d` | Details anzeigen |
+| `A` | Alle Standardaktionen akzeptieren |
+| `1` | Alle nach Replica 2 |
+| `2` | Alle nach Replica 1 |
+| `C` | Alle Konflikte ueberspringen |
+| `R` | Alle zuruecksetzen |
+| `g` | Ausfuehren — Sync starten |
+| `q` | Beenden ohne Sync |
+
+**CLI-Binary kompilieren:**
+
+```bash
+cd cli
+dart compile exe bin/unisync.dart -o unisync.exe
+```
 
 ### Profil-Konfiguration
 
@@ -275,9 +384,9 @@ GPLv3 — see / siehe [LICENSE](LICENSE)
 
 | Metric / Metrik | Value / Wert |
 |-----------------|-------------|
-| Source files / Quelldateien | 50 |
+| Source files / Quelldateien | 53 |
 | Test files / Testdateien | 31 |
 | Tests | 326 |
-| Lines of code / Codezeilen | ~10,000 |
+| Lines of code / Codezeilen | ~11,000 |
 | Language / Sprache | Dart / Flutter |
 | Platforms / Plattformen | Windows, macOS, Linux |
