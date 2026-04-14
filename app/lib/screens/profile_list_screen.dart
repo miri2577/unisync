@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:unison_core/unison_core.dart';
 
+import '../state/settings_state.dart';
 import '../state/sync_state.dart';
 import 'sync_screen.dart';
 
@@ -144,6 +147,18 @@ class _ProfileCard extends ConsumerWidget {
                   child: const Text('Delete'),
                 ),
                 const SizedBox(width: 8),
+                Button(
+                  onPressed: () => _startWatch(context, ref),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(FluentIcons.red_eye, size: 12),
+                      SizedBox(width: 4),
+                      Text('Watch'),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
                 FilledButton(
                   onPressed: () => _startSync(context, ref),
                   child: const Text('Sync'),
@@ -160,6 +175,14 @@ class _ProfileCard extends ConsumerWidget {
     Navigator.of(context).push(
       FluentPageRoute(
         builder: (_) => SyncScreen(profileName: profile.name),
+      ),
+    );
+  }
+
+  void _startWatch(BuildContext context, WidgetRef ref) {
+    Navigator.of(context).push(
+      FluentPageRoute(
+        builder: (_) => _WatchScreen(profileName: profile.name),
       ),
     );
   }
@@ -267,5 +290,165 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
         .read(profileListProvider.notifier)
         .createProfile(name, root1, root2);
     Navigator.pop(context);
+  }
+}
+
+/// Watch mode screen — continuous sync with live status.
+class _WatchScreen extends ConsumerStatefulWidget {
+  final String profileName;
+  const _WatchScreen({required this.profileName});
+
+  @override
+  ConsumerState<_WatchScreen> createState() => _WatchScreenState();
+}
+
+class _WatchScreenState extends ConsumerState<_WatchScreen> {
+  WatchSyncController? _controller;
+  final _log = <String>[];
+  bool _running = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startWatch());
+  }
+
+  @override
+  void dispose() {
+    _controller?.stop();
+    super.dispose();
+  }
+
+  void _startWatch() {
+    final profileDir = ref.read(profileDirProvider);
+    final settings = ref.read(appSettingsProvider);
+    final prefs = UnisonPrefs();
+    final parser = ProfileParser(profileDir);
+    parser.loadProfile(widget.profileName, prefs.registry);
+
+    if (prefs.root.value.length < 2) {
+      setState(() => _log.add('Error: profile needs 2 roots'));
+      return;
+    }
+
+    final root1 = Fspath.fromLocal(prefs.root.value[0]);
+    final root2 = Fspath.fromLocal(prefs.root.value[1]);
+    final store = ArchiveStore(profileDir);
+    store.recoverAll();
+
+    final engine = SyncEngine(
+      archiveStore: store,
+      transport: TransportOrchestrator(
+        maxThreads: settings.maxThreads,
+        maxErrors: settings.maxErrors,
+      ),
+    );
+
+    setState(() {
+      _running = true;
+      _log.add('[${_time()}] Watch mode started');
+      _log.add('Root 1: $root1');
+      _log.add('Root 2: $root2');
+    });
+
+    _controller = engine.syncWatch(
+      root1,
+      root2,
+      updateConfig: settings.toUpdateConfig(),
+      reconConfig: settings.toReconConfig(),
+      onProgress: (phase, msg) {
+        setState(() => _log.add('[${_time()}] $msg'));
+      },
+      onSyncComplete: (result) {
+        setState(() {
+          if (result.propagated > 0 || result.failed > 0) {
+            _log.add('[${_time()}] Sync: ${result.propagated} OK, '
+                '${result.skipped} skipped, ${result.failed} failed');
+          } else {
+            _log.add('[${_time()}] In sync');
+          }
+        });
+      },
+    );
+  }
+
+  String _time() => DateTime.now().toString().substring(11, 19);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = FluentTheme.of(context);
+
+    return NavigationView(
+      pane: NavigationPane(
+        displayMode: PaneDisplayMode.top,
+        items: [
+          PaneItem(
+            icon: const Icon(FluentIcons.red_eye),
+            title: Text('Watch: ${widget.profileName}'),
+            body: Column(
+              children: [
+                // Status bar
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: theme.resources.dividerStrokeColorDefault,
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(FluentIcons.back),
+                        onPressed: () {
+                          _controller?.stop();
+                          Navigator.of(context).pop();
+                        },
+                      ),
+                      const SizedBox(width: 12),
+                      if (_running)
+                        const Padding(
+                          padding: EdgeInsets.only(right: 8),
+                          child: SizedBox(
+                            width: 16, height: 16,
+                            child: ProgressRing(strokeWidth: 2),
+                          ),
+                        ),
+                      Text(
+                        _running ? 'Watching for changes...' : 'Stopped',
+                        style: theme.typography.body,
+                      ),
+                      const Spacer(),
+                      Button(
+                        onPressed: () {
+                          _controller?.stop();
+                          setState(() {
+                            _running = false;
+                            _log.add('[${_time()}] Stopped');
+                          });
+                        },
+                        child: const Text('Stop'),
+                      ),
+                    ],
+                  ),
+                ),
+                // Log
+                Expanded(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.all(12),
+                    itemCount: _log.length,
+                    itemBuilder: (_, i) => Text(
+                      _log[i],
+                      style: const TextStyle(fontFamily: 'Consolas', fontSize: 13),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
