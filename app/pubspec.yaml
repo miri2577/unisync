@@ -1,0 +1,24 @@
+name: unison_app
+description: Unison file synchronizer — Flutter desktop UI.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  fluent_ui: ^4.11.1
+  flutter_riverpod: ^2.6.1
+  file_picker: ^11.0.2
+  unison_core:
+    path: ../packages/unison_core
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

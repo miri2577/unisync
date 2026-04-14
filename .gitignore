@@ -1,0 +1,30 @@
+# Dart/Flutter
+.dart_tool/
+.packages
+build/
+*.iml
+.idea/
+.vscode/
+*.lock
+
+# Flutter
+app/build/
+app/windows/flutter/ephemeral/
+app/macos/Flutter/ephemeral/
+app/linux/flutter/ephemeral/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+
+# Packages
+packages/unison_core/.dart_tool/
+packages/unison_core/build/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+*.swp
+*.swo
+*~
