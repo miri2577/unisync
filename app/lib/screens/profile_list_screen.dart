@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:unison_core/unison_core.dart';
@@ -220,11 +221,26 @@ class _CreateProfileDialog extends StatefulWidget {
   State<_CreateProfileDialog> createState() => _CreateProfileDialogState();
 }
 
+/// Known WebDAV providers with URL templates.
+const _webdavProviders = <(String, String, String)>[
+  ('Nextcloud', 'https://YOUR-SERVER/remote.php/dav/files/USERNAME/', 'Replace YOUR-SERVER and USERNAME'),
+  ('HiDrive (Strato)', 'https://webdav.hidrive.strato.com/', 'Uses your HiDrive login'),
+  ('pCloud', 'https://webdav.pcloud.com/', 'Uses your pCloud login'),
+  ('Box', 'https://dav.box.com/dav/', 'Uses your Box login'),
+  ('4shared', 'https://webdav.4shared.com/', 'Uses your 4shared login'),
+  ('Yandex Disk', 'https://webdav.yandex.com/', 'Uses your Yandex login'),
+  ('Synology NAS', 'https://YOUR-NAS:5006/', 'Replace YOUR-NAS with IP/hostname'),
+  ('QNAP NAS', 'https://YOUR-NAS:8080/', 'Replace YOUR-NAS with IP/hostname'),
+  ('ownCloud', 'https://YOUR-SERVER/remote.php/dav/files/USERNAME/', 'Replace YOUR-SERVER and USERNAME'),
+  ('Custom', '', 'Enter your own WebDAV URL'),
+];
+
 class _CreateProfileDialogState extends State<_CreateProfileDialog> {
   final _nameController = TextEditingController();
   final _root1Controller = TextEditingController();
   final _root2Controller = TextEditingController();
-  String _root2Type = 'local'; // local, ssh, webdav
+  String _root2Type = 'local';
+  String _webdavProvider = 'Custom';
   final _webdavUrlController = TextEditingController();
   final _webdavUserController = TextEditingController();
   final _webdavPassController = TextEditingController();
@@ -258,9 +274,20 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
           const SizedBox(height: 16),
           InfoLabel(
             label: 'Root 1 (Local Path)',
-            child: TextBox(
-              controller: _root1Controller,
-              placeholder: 'C:\\Users\\you\\Documents',
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextBox(
+                    controller: _root1Controller,
+                    placeholder: 'C:\\Users\\you\\Documents',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Button(
+                  onPressed: () => _pickFolder(_root1Controller),
+                  child: const Icon(FluentIcons.folder_open, size: 14),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 16),
@@ -277,17 +304,77 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
             ),
           ),
           const SizedBox(height: 16),
-          if (_root2Type == 'local' || _root2Type == 'ssh')
+          if (_root2Type == 'local')
             InfoLabel(
-              label: _root2Type == 'local' ? 'Root 2 (Local Path)' : 'Root 2 (SSH)',
+              label: 'Root 2 (Local Path)',
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextBox(
+                      controller: _root2Controller,
+                      placeholder: 'D:\\Backup\\Documents',
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Button(
+                    onPressed: () => _pickFolder(_root2Controller),
+                    child: const Icon(FluentIcons.folder_open, size: 14),
+                  ),
+                ],
+              ),
+            ),
+          if (_root2Type == 'ssh')
+            InfoLabel(
+              label: 'Root 2 (SSH)',
               child: TextBox(
                 controller: _root2Controller,
-                placeholder: _root2Type == 'local'
-                    ? 'D:\\Backup\\Documents'
-                    : 'ssh://user@host/path',
+                placeholder: 'ssh://user@host/path',
               ),
             ),
           if (_root2Type == 'webdav') ...[
+            InfoLabel(
+              label: 'Provider',
+              child: ComboBox<String>(
+                value: _webdavProvider,
+                isExpanded: true,
+                items: [
+                  for (final (name, _, hint) in _webdavProviders)
+                    ComboBoxItem(
+                      value: name,
+                      child: Text(name),
+                    ),
+                ],
+                onChanged: (v) {
+                  setState(() {
+                    _webdavProvider = v ?? 'Custom';
+                    final entry = _webdavProviders.firstWhere(
+                      (e) => e.$1 == _webdavProvider,
+                      orElse: () => ('Custom', '', ''),
+                    );
+                    if (entry.$2.isNotEmpty) {
+                      _webdavUrlController.text = entry.$2;
+                    }
+                  });
+                },
+              ),
+            ),
+            const SizedBox(height: 4),
+            // Show hint for selected provider
+            Builder(builder: (_) {
+              final entry = _webdavProviders.firstWhere(
+                (e) => e.$1 == _webdavProvider,
+                orElse: () => ('', '', ''),
+              );
+              if (entry.$3.isNotEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(entry.$3,
+                    style: FluentTheme.of(context).typography.caption),
+                );
+              }
+              return const SizedBox();
+            }),
+            const SizedBox(height: 8),
             InfoLabel(
               label: 'WebDAV URL',
               child: TextBox(
@@ -325,6 +412,15 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
         ),
       ],
     );
+  }
+
+  Future<void> _pickFolder(TextEditingController controller) async {
+    final result = await FilePicker.getDirectoryPath(
+      dialogTitle: 'Select Folder',
+    );
+    if (result != null) {
+      controller.text = result;
+    }
   }
 
   void _create() {
