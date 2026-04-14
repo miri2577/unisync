@@ -1,0 +1,476 @@
+/// WebDAV client for remote file synchronization.
+///
+/// Provides file operations over HTTP/HTTPS using the WebDAV protocol
+/// (RFC 4918). Supports PROPFIND, GET, PUT, DELETE, MKCOL, MOVE.
+/// Works with Nextcloud, Synology, HiDrive, pCloud, Box, and any
+/// WebDAV-compatible server.
+library;
+
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:http/http.dart' as http;
+import 'package:xml/xml.dart';
+
+import '../model/fileinfo.dart';
+import '../model/fspath.dart';
+import '../model/name.dart';
+import '../model/props.dart';
+import '../model/sync_path.dart';
+import '../util/trace.dart';
+
+/// WebDAV file/directory entry from PROPFIND response.
+class WebDavEntry {
+  final String href;
+  final String name;
+  final bool isDirectory;
+  final int size;
+  final DateTime? lastModified;
+  final String? etag;
+  final String? contentType;
+
+  const WebDavEntry({
+    required this.href,
+    required this.name,
+    required this.isDirectory,
+    this.size = 0,
+    this.lastModified,
+    this.etag,
+    this.contentType,
+  });
+
+  @override
+  String toString() => 'WebDavEntry($name, ${isDirectory ? "dir" : "${size}B"})';
+}
+
+/// WebDAV connection configuration.
+class WebDavConfig {
+  /// Server URL (e.g. https://cloud.example.com/remote.php/dav/files/user/)
+  final String baseUrl;
+
+  /// Username for authentication.
+  final String username;
+
+  /// Password for authentication.
+  final String password;
+
+  /// Connection timeout.
+  final Duration timeout;
+
+  const WebDavConfig({
+    required this.baseUrl,
+    required this.username,
+    required this.password,
+    this.timeout = const Duration(seconds: 30),
+  });
+
+  /// Base URL normalized with trailing slash.
+  String get normalizedUrl {
+    var url = baseUrl;
+    if (!url.endsWith('/')) url += '/';
+    return url;
+  }
+}
+
+/// WebDAV client for remote file operations.
+class WebDavClient {
+  final WebDavConfig config;
+  final http.Client _http;
+
+  WebDavClient(this.config) : _http = http.Client();
+
+  /// Auth header value.
+  String get _authHeader =>
+      'Basic ${base64Encode(utf8.encode('${config.username}:${config.password}'))}';
+
+  /// Build full URL for a relative path.
+  String _url(String relativePath) {
+    if (relativePath.isEmpty) return config.normalizedUrl;
+    return '${config.normalizedUrl}$relativePath';
+  }
+
+  /// Common headers for all requests.
+  Map<String, String> get _headers => {
+    'Authorization': _authHeader,
+  };
+
+  // -----------------------------------------------------------------------
+  // Connection test
+  // -----------------------------------------------------------------------
+
+  /// Test the connection by sending a PROPFIND to the root.
+  Future<bool> testConnection() async {
+    try {
+      final entries = await listDirectory('');
+      return true;
+    } catch (e) {
+      Trace.warning(TraceCategory.remote, 'WebDAV connection test failed: $e');
+      return false;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Directory listing (PROPFIND)
+  // -----------------------------------------------------------------------
+
+  /// List directory contents via PROPFIND.
+  Future<List<WebDavEntry>> listDirectory(String path) async {
+    final url = _url(path.isEmpty ? '' : path + (path.endsWith('/') ? '' : '/'));
+
+    final response = await _http.send(http.Request('PROPFIND', Uri.parse(url))
+      ..headers.addAll({
+        ..._headers,
+        'Depth': '1',
+        'Content-Type': 'application/xml',
+      })
+      ..body = '''<?xml version="1.0" encoding="utf-8"?>
+<d:propfind xmlns:d="DAV:">
+  <d:prop>
+    <d:resourcetype/>
+    <d:getcontentlength/>
+    <d:getlastmodified/>
+    <d:getetag/>
+    <d:getcontenttype/>
+  </d:prop>
+</d:propfind>''');
+
+    final body = await response.stream.bytesToString();
+
+    if (response.statusCode != 207) {
+      throw WebDavException(
+        'PROPFIND failed: ${response.statusCode}',
+        response.statusCode,
+      );
+    }
+
+    return _parsePropfindResponse(body, url);
+  }
+
+  /// List child names of a directory (matching OsFs.childrenOf interface).
+  Future<List<Name>> childrenOf(SyncPath path) async {
+    final entries = await listDirectory(path.toString());
+    return entries
+        .where((e) => e.name.isNotEmpty)
+        .map((e) => Name(e.name))
+        .toList()
+      ..sort();
+  }
+
+  /// Get info about a single path.
+  Future<WebDavEntry?> stat(String path) async {
+    try {
+      final url = _url(path);
+      final response = await _http.send(http.Request('PROPFIND', Uri.parse(url))
+        ..headers.addAll({
+          ..._headers,
+          'Depth': '0',
+          'Content-Type': 'application/xml',
+        })
+        ..body = '''<?xml version="1.0" encoding="utf-8"?>
+<d:propfind xmlns:d="DAV:">
+  <d:prop>
+    <d:resourcetype/>
+    <d:getcontentlength/>
+    <d:getlastmodified/>
+    <d:getetag/>
+  </d:prop>
+</d:propfind>''');
+
+      final body = await response.stream.bytesToString();
+      if (response.statusCode != 207) return null;
+
+      final entries = _parsePropfindResponse(body, _url(''));
+      // Depth 0 returns the item itself
+      return entries.isNotEmpty ? entries.first : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Check if a path exists.
+  Future<bool> exists(String path) async {
+    final response = await _http.head(
+      Uri.parse(_url(path)),
+      headers: _headers,
+    );
+    return response.statusCode == 200 || response.statusCode == 301;
+  }
+
+  // -----------------------------------------------------------------------
+  // File operations
+  // -----------------------------------------------------------------------
+
+  /// Download a file.
+  Future<Uint8List> readFile(String path) async {
+    final response = await _http.get(
+      Uri.parse(_url(path)),
+      headers: _headers,
+    );
+
+    if (response.statusCode != 200) {
+      throw WebDavException(
+        'GET failed for $path: ${response.statusCode}',
+        response.statusCode,
+      );
+    }
+
+    return response.bodyBytes;
+  }
+
+  /// Download a file as a stream (for large files).
+  Future<http.StreamedResponse> readFileStream(String path) async {
+    final request = http.Request('GET', Uri.parse(_url(path)));
+    request.headers.addAll(_headers);
+    return _http.send(request);
+  }
+
+  /// Upload a file.
+  Future<void> writeFile(String path, Uint8List data) async {
+    final response = await _http.put(
+      Uri.parse(_url(path)),
+      headers: {
+        ..._headers,
+        'Content-Type': 'application/octet-stream',
+      },
+      body: data,
+    );
+
+    if (response.statusCode != 201 &&
+        response.statusCode != 204 &&
+        response.statusCode != 200) {
+      throw WebDavException(
+        'PUT failed for $path: ${response.statusCode}',
+        response.statusCode,
+      );
+    }
+  }
+
+  /// Create a directory (MKCOL).
+  Future<void> mkdir(String path) async {
+    final response = await _http.send(
+      http.Request('MKCOL', Uri.parse(_url(path)))
+        ..headers.addAll(_headers),
+    );
+
+    final status = response.statusCode;
+    // 201 = created, 405 = already exists (ok)
+    if (status != 201 && status != 405) {
+      throw WebDavException('MKCOL failed for $path: $status', status);
+    }
+  }
+
+  /// Create directory and all parents.
+  Future<void> mkdirRecursive(String path) async {
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    var current = '';
+    for (final part in parts) {
+      current += '$part/';
+      await mkdir(current);
+    }
+  }
+
+  /// Delete a file or directory.
+  Future<void> delete(String path) async {
+    final response = await _http.delete(
+      Uri.parse(_url(path)),
+      headers: _headers,
+    );
+
+    if (response.statusCode != 204 && response.statusCode != 200) {
+      throw WebDavException(
+        'DELETE failed for $path: ${response.statusCode}',
+        response.statusCode,
+      );
+    }
+  }
+
+  /// Move/rename a file or directory.
+  Future<void> move(String fromPath, String toPath) async {
+    final response = await _http.send(
+      http.Request('MOVE', Uri.parse(_url(fromPath)))
+        ..headers.addAll({
+          ..._headers,
+          'Destination': _url(toPath),
+          'Overwrite': 'T',
+        }),
+    );
+
+    final status = response.statusCode;
+    if (status != 201 && status != 204) {
+      throw WebDavException('MOVE failed: $status', status);
+    }
+  }
+
+  /// Copy a file on the server side.
+  Future<void> copy(String fromPath, String toPath) async {
+    final response = await _http.send(
+      http.Request('COPY', Uri.parse(_url(fromPath)))
+        ..headers.addAll({
+          ..._headers,
+          'Destination': _url(toPath),
+          'Overwrite': 'T',
+        }),
+    );
+
+    final status = response.statusCode;
+    if (status != 201 && status != 204) {
+      throw WebDavException('COPY failed: $status', status);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Higher-level helpers for sync integration
+  // -----------------------------------------------------------------------
+
+  /// Get Fileinfo-compatible data for a path.
+  Future<Fileinfo> getFileinfo(SyncPath path) async {
+    final entry = await stat(path.toString());
+    if (entry == null) return Fileinfo.absent;
+
+    return Fileinfo(
+      typ: entry.isDirectory ? FileType.directory : FileType.file,
+      inode: 0,
+      desc: Props(
+        permissions: entry.isDirectory ? 0x1FF : 0x1ED,
+        modTime: entry.lastModified ?? DateTime.now(),
+        length: entry.size,
+      ),
+      stamp: const NoStamp(),
+    );
+  }
+
+  /// Upload a file with automatic parent directory creation.
+  Future<void> writeFileWithParents(String path, Uint8List data) async {
+    // Ensure parent directories exist
+    final lastSlash = path.lastIndexOf('/');
+    if (lastSlash > 0) {
+      await mkdirRecursive(path.substring(0, lastSlash));
+    }
+    await writeFile(path, data);
+  }
+
+  /// Close the client and release resources.
+  void close() {
+    _http.close();
+  }
+
+  // -----------------------------------------------------------------------
+  // PROPFIND XML parsing
+  // -----------------------------------------------------------------------
+
+  List<WebDavEntry> _parsePropfindResponse(String xml, String requestUrl) {
+    final doc = XmlDocument.parse(xml);
+    final entries = <WebDavEntry>[];
+
+    final responses = doc.findAllElements('d:response')
+        .followedBy(doc.findAllElements('D:response'))
+        .followedBy(doc.findAllElements('response'));
+
+    for (final resp in responses) {
+      final href = _getText(resp, 'href') ??
+          _getText(resp, 'd:href') ??
+          _getText(resp, 'D:href') ??
+          '';
+
+      // Skip the directory itself (depth=1 includes parent)
+      if (_isParentEntry(href, requestUrl)) continue;
+
+      final name = Uri.decodeFull(href.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '');
+      if (name.isEmpty) continue;
+
+      final isDir = _hasResourceType(resp, 'collection');
+      final size = int.tryParse(
+        _getPropText(resp, 'getcontentlength') ?? '0',
+      ) ?? 0;
+
+      DateTime? modified;
+      final modStr = _getPropText(resp, 'getlastmodified');
+      if (modStr != null) {
+        modified = _parseHttpDate(modStr);
+      }
+
+      final etag = _getPropText(resp, 'getetag');
+      final contentType = _getPropText(resp, 'getcontenttype');
+
+      entries.add(WebDavEntry(
+        href: href,
+        name: name,
+        isDirectory: isDir,
+        size: size,
+        lastModified: modified,
+        etag: etag,
+        contentType: contentType,
+      ));
+    }
+
+    return entries;
+  }
+
+  bool _isParentEntry(String href, String requestUrl) {
+    final normHref = href.endsWith('/') ? href : '$href/';
+    final normReq = requestUrl.endsWith('/') ? requestUrl : '$requestUrl/';
+    final hrefUri = Uri.tryParse(normHref);
+    final reqUri = Uri.tryParse(normReq);
+    if (hrefUri != null && reqUri != null) {
+      return hrefUri.path == reqUri.path;
+    }
+    return normHref == normReq;
+  }
+
+  String? _getText(XmlElement elem, String tag) {
+    final found = elem.findAllElements(tag);
+    return found.isNotEmpty ? found.first.innerText : null;
+  }
+
+  String? _getPropText(XmlElement response, String propName) {
+    // Search in all prop elements
+    for (final prop in response.findAllElements('d:prop')
+        .followedBy(response.findAllElements('D:prop'))
+        .followedBy(response.findAllElements('prop'))) {
+      final found = prop.findAllElements('d:$propName')
+          .followedBy(prop.findAllElements('D:$propName'))
+          .followedBy(prop.findAllElements(propName));
+      if (found.isNotEmpty) return found.first.innerText;
+    }
+    return null;
+  }
+
+  bool _hasResourceType(XmlElement response, String type) {
+    for (final rt in response.findAllElements('d:resourcetype')
+        .followedBy(response.findAllElements('D:resourcetype'))
+        .followedBy(response.findAllElements('resourcetype'))) {
+      if (rt.findAllElements('d:$type').isNotEmpty ||
+          rt.findAllElements('D:$type').isNotEmpty ||
+          rt.findAllElements(type).isNotEmpty) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Parse HTTP date format (RFC 2616).
+  DateTime? _parseHttpDate(String s) {
+    try {
+      return DateTime.parse(s);
+    } catch (_) {
+      try {
+        // Try HTTP date format: "Sun, 06 Nov 1994 08:49:37 GMT"
+        return HttpDate.parse(s);
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+}
+
+/// WebDAV-specific exception.
+class WebDavException implements Exception {
+  final String message;
+  final int statusCode;
+
+  const WebDavException(this.message, this.statusCode);
+
+  @override
+  String toString() => 'WebDavException($statusCode): $message';
+}

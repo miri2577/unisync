@@ -49,6 +49,8 @@ export 'src/engine/update.dart';
 export 'src/remote/connection.dart';
 export 'src/remote/protocol.dart';
 export 'src/remote/remote_sync.dart';
+export 'src/remote/webdav.dart';
+export 'src/remote/webdav_sync.dart';
 
 // Filter
 export 'src/filter/glob.dart';

@@ -224,12 +224,19 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
   final _nameController = TextEditingController();
   final _root1Controller = TextEditingController();
   final _root2Controller = TextEditingController();
+  String _root2Type = 'local'; // local, ssh, webdav
+  final _webdavUrlController = TextEditingController();
+  final _webdavUserController = TextEditingController();
+  final _webdavPassController = TextEditingController();
 
   @override
   void dispose() {
     _nameController.dispose();
     _root1Controller.dispose();
     _root2Controller.dispose();
+    _webdavUrlController.dispose();
+    _webdavUserController.dispose();
+    _webdavPassController.dispose();
     super.dispose();
   }
 
@@ -258,12 +265,53 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
           ),
           const SizedBox(height: 16),
           InfoLabel(
-            label: 'Root 2 (Local Path or SSH)',
-            child: TextBox(
-              controller: _root2Controller,
-              placeholder: 'D:\\Backup\\Documents',
+            label: 'Root 2 Type',
+            child: ComboBox<String>(
+              value: _root2Type,
+              items: const [
+                ComboBoxItem(value: 'local', child: Text('Local Path')),
+                ComboBoxItem(value: 'ssh', child: Text('SSH Remote')),
+                ComboBoxItem(value: 'webdav', child: Text('WebDAV (Nextcloud, HiDrive, ...)')),
+              ],
+              onChanged: (v) => setState(() => _root2Type = v ?? 'local'),
             ),
           ),
+          const SizedBox(height: 16),
+          if (_root2Type == 'local' || _root2Type == 'ssh')
+            InfoLabel(
+              label: _root2Type == 'local' ? 'Root 2 (Local Path)' : 'Root 2 (SSH)',
+              child: TextBox(
+                controller: _root2Controller,
+                placeholder: _root2Type == 'local'
+                    ? 'D:\\Backup\\Documents'
+                    : 'ssh://user@host/path',
+              ),
+            ),
+          if (_root2Type == 'webdav') ...[
+            InfoLabel(
+              label: 'WebDAV URL',
+              child: TextBox(
+                controller: _webdavUrlController,
+                placeholder: 'https://cloud.example.com/remote.php/dav/files/user/',
+              ),
+            ),
+            const SizedBox(height: 12),
+            InfoLabel(
+              label: 'Username',
+              child: TextBox(
+                controller: _webdavUserController,
+                placeholder: 'username',
+              ),
+            ),
+            const SizedBox(height: 12),
+            InfoLabel(
+              label: 'Password',
+              child: PasswordBox(
+                controller: _webdavPassController,
+                placeholder: 'password',
+              ),
+            ),
+          ],
         ],
       ),
       actions: [
@@ -282,13 +330,32 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
   void _create() {
     final name = _nameController.text.trim();
     final root1 = _root1Controller.text.trim();
-    final root2 = _root2Controller.text.trim();
 
-    if (name.isEmpty || root1.isEmpty || root2.isEmpty) return;
+    if (name.isEmpty || root1.isEmpty) return;
 
-    widget.ref
-        .read(profileListProvider.notifier)
-        .createProfile(name, root1, root2);
+    String root2;
+    String extraConfig = '';
+
+    if (_root2Type == 'webdav') {
+      final url = _webdavUrlController.text.trim();
+      final user = _webdavUserController.text.trim();
+      final pass = _webdavPassController.text.trim();
+      if (url.isEmpty || user.isEmpty) return;
+      root2 = 'webdav://$url';
+      extraConfig = 'webdavurl = $url\n'
+          'webdavuser = $user\n'
+          'webdavpass = $pass\n';
+    } else {
+      root2 = _root2Controller.text.trim();
+      if (root2.isEmpty) return;
+    }
+
+    // Create profile with optional WebDAV config
+    final profileDir = widget.ref.read(profileDirProvider);
+    Directory(profileDir).createSync(recursive: true);
+    final content = 'root = $root1\nroot = $root2\n$extraConfig';
+    File('$profileDir/$name.prf').writeAsStringSync(content);
+    widget.ref.read(profileListProvider.notifier).refresh();
     Navigator.pop(context);
   }
 }
