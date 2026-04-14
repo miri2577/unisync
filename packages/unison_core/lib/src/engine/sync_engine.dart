@@ -19,6 +19,7 @@ import '../model/sync_path.dart';
 import '../model/update_item.dart';
 import '../remote/remote_sync.dart';
 import '../util/trace.dart';
+import 'history.dart';
 import 'recon.dart';
 import 'transport.dart';
 import 'update.dart';
@@ -74,6 +75,9 @@ class SyncEngine {
   /// Remote client for replica 2 (null = both local).
   final RemoteSyncClient? _remoteClient;
 
+  /// Sync history recorder.
+  final SyncHistory? _history;
+
   SyncEngine({
     ArchiveStore? archiveStore,
     UpdateDetector? updateDetector,
@@ -82,13 +86,15 @@ class SyncEngine {
     FpCache? fpCache1,
     FpCache? fpCache2,
     RemoteSyncClient? remoteClient,
+    SyncHistory? history,
   })  : _archiveStore = archiveStore ?? ArchiveStore(ArchiveStore.defaultArchiveDir()),
         _updateDetector = updateDetector ?? UpdateDetector(),
         _reconciler = reconciler ?? const Reconciler(),
         _transport = transport ?? TransportOrchestrator(),
         _fpCache1 = fpCache1 ?? FpCache(),
         _fpCache2 = fpCache2 ?? FpCache(),
-        _remoteClient = remoteClient;
+        _remoteClient = remoteClient,
+        _history = history;
 
   /// Run a complete sync between two local roots.
   ///
@@ -169,14 +175,60 @@ class SyncEngine {
     onProgress?.call(SyncPhase.updatingArchive, 'Updating archives...');
     _updateAndSaveArchive(root1, root2, uConfig);
 
-    onProgress?.call(SyncPhase.done, 'Sync complete');
-
-    return SyncResult(
+    // Record in history
+    final syncResult = SyncResult(
       transportResults: transportResults,
       reconItems: reconResult.items,
       equalCount: reconResult.equalCount,
       scanErrors: reconResult.errors,
     );
+    _recordHistory(root1, root2, syncResult);
+
+    onProgress?.call(SyncPhase.done, 'Sync complete');
+    return syncResult;
+  }
+
+  /// Record a sync operation in the history log.
+  void _recordHistory(Fspath root1, Fspath root2, SyncResult result) {
+    if (_history == null) return;
+    if (result.propagated == 0 && result.failed == 0) return;
+
+    final now = DateTime.now();
+    final entries = <HistoryEntry>[];
+
+    for (var i = 0; i < result.reconItems.length; i++) {
+      final item = result.reconItems[i];
+      final transport = i < result.transportResults.length
+          ? result.transportResults[i]
+          : null;
+      if (transport is TransportSuccess) {
+        if (item.replicas case Different(diff: var diff)) {
+          final source = diff.direction is Replica1ToReplica2
+              ? diff.rc1 : diff.rc2;
+          entries.add(HistoryEntry(
+            path: item.path1.toString(),
+            action: source.status.name,
+            direction: diff.direction is Replica1ToReplica2
+                ? 'r1to2' : 'r2to1',
+            size: source.size.$2,
+          ));
+        }
+      }
+    }
+
+    final record = SyncRecord(
+      id: '${now.millisecondsSinceEpoch}',
+      timestamp: now,
+      root1: root1.toString(),
+      root2: root2.toString(),
+      entries: entries,
+      propagated: result.propagated,
+      skipped: result.skipped,
+      failed: result.failed,
+      durationMs: 0,
+    );
+
+    _history.record(record);
   }
 
   /// Run a sync where replica 2 is remote (accessed via [_remoteClient]).
@@ -308,6 +360,77 @@ class SyncEngine {
       return TransportSkipped(item.path1, msg);
     }
     return TransportSkipped(item.path1, 'Unknown');
+  }
+
+  /// Scan + reconcile only (no propagation). Returns reconItems for review.
+  ///
+  /// Use this for interactive workflows where the user reviews changes
+  /// before committing. Call [propagateAndSave] after review.
+  ReconResult scanOnly(
+    Fspath root1,
+    Fspath root2, {
+    UpdateConfig? updateConfig,
+    ReconConfig? reconConfig,
+    List<SyncPath>? paths,
+    SyncProgressCallback? onProgress,
+  }) {
+    final uConfig = updateConfig ?? const UpdateConfig();
+    final rConfig = reconConfig ?? const ReconConfig();
+    final syncPaths = paths ?? [SyncPath.empty];
+
+    onProgress?.call(SyncPhase.scanning, 'Loading archives...');
+    final archive = _archiveStore.load(root1, root2);
+
+    onProgress?.call(SyncPhase.scanning, 'Scanning replica 1...');
+    final updates = <(SyncPath, UpdateItem, UpdateItem)>[];
+    for (final syncPath in syncPaths) {
+      final d1 = UpdateDetector(fpCache: _fpCache1);
+      final (ui1, _) = d1.findUpdates(root1, syncPath, archive, uConfig);
+      onProgress?.call(SyncPhase.scanning, 'Scanning replica 2...');
+      final d2 = UpdateDetector(fpCache: _fpCache2);
+      final (ui2, _) = d2.findUpdates(root2, syncPath, archive, uConfig);
+      updates.add((syncPath, ui1, ui2));
+    }
+
+    onProgress?.call(SyncPhase.reconciling, 'Reconciling...');
+    if (updates.length == 1) {
+      final (sp, u1, u2) = updates[0];
+      return _reconciler.reconcileUpdates(sp, u1, u2, rConfig);
+    }
+    final flat = <(SyncPath, UpdateItem, UpdateItem)>[];
+    for (final (sp, u1, u2) in updates) {
+      _flattenUpdates(sp, u1, u2, flat);
+    }
+    return _reconciler.reconcileAll(flat, rConfig);
+  }
+
+  /// Propagate reviewed items and save archives.
+  ///
+  /// Call after [scanOnly] + user review.
+  SyncResult propagateAndSave(
+    Fspath root1,
+    Fspath root2,
+    ReconResult reconResult, {
+    UpdateConfig? updateConfig,
+    SyncProgressCallback? onProgress,
+  }) {
+    final uConfig = updateConfig ?? const UpdateConfig();
+
+    onProgress?.call(SyncPhase.propagating, 'Propagating...');
+    final transportResults = _transport.propagateAll(
+      root1, root2, reconResult.items,
+    );
+
+    onProgress?.call(SyncPhase.updatingArchive, 'Updating archives...');
+    _updateAndSaveArchive(root1, root2, uConfig);
+
+    onProgress?.call(SyncPhase.done, 'Sync complete');
+    return SyncResult(
+      transportResults: transportResults,
+      reconItems: reconResult.items,
+      equalCount: reconResult.equalCount,
+      scanErrors: reconResult.errors,
+    );
   }
 
   /// Build fresh archives from both roots after propagation and save them.

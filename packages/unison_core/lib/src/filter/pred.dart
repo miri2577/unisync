@@ -36,6 +36,13 @@ class Pattern {
       return Pattern._(PatternType.path, glob, RegExp(regex));
     }
 
+    if (trimmed.startsWith('BelowPath ') || trimmed.startsWith('BelowPath\t')) {
+      final prefix = trimmed.substring(10).trim();
+      // Matches the path itself and everything below it
+      final regex = '^${globToRegex(prefix)}(/.*)?'  r'$';
+      return Pattern._(PatternType.belowPath, prefix, RegExp(regex));
+    }
+
     if (trimmed.startsWith('Regex ') || trimmed.startsWith('Regex\t')) {
       final regexStr = trimmed.substring(6).trim();
       return Pattern._(PatternType.regex, regexStr, RegExp(regexStr));
@@ -54,6 +61,7 @@ class Pattern {
       PatternType.name => _matchName(fullPath),
       PatternType.path => _regex.hasMatch(fullPath),
       PatternType.regex => _regex.hasMatch(fullPath),
+      PatternType.belowPath => _regex.hasMatch(fullPath),
     };
   }
 
@@ -69,7 +77,7 @@ class Pattern {
 }
 
 /// Type of pattern matching.
-enum PatternType { name, path, regex }
+enum PatternType { name, path, regex, belowPath }
 
 /// A predicate composed of multiple patterns (OR logic).
 ///

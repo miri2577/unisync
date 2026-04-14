@@ -158,9 +158,9 @@ void _runOnce(
     stdout.write('\r${" " * 60}\r');
     printResult(result);
   } else {
-    // Interactive: scan+reconcile first, let user review, then propagate
+    // Interactive: scan+reconcile, let user review, then propagate
     print('\nScanning...');
-    final result = engine.sync(
+    final reconResult = engine.scanOnly(
       root1, root2,
       updateConfig: updateConfig,
       reconConfig: reconConfig,
@@ -168,8 +168,26 @@ void _runOnce(
     );
     stdout.write('\r${" " * 60}\r');
 
-    // engine.sync already propagated — show results
-    // (In future: split scan/recon/propagate for true interactive mode)
+    if (reconResult.items.isEmpty) {
+      print('\nNothing to do — everything is in sync.');
+      return;
+    }
+
+    // Let user review and modify directions
+    final proceed = reviewReconItems(reconResult.items);
+    if (!proceed) {
+      print('Aborted.');
+      return;
+    }
+
+    // Propagate with user's choices
+    print('\nPropagating...');
+    final result = engine.propagateAndSave(
+      root1, root2, reconResult,
+      updateConfig: updateConfig,
+      onProgress: (phase, msg) => stdout.write('\r$msg${" " * 30}'),
+    );
+    stdout.write('\r${" " * 60}\r');
     printResult(result);
   }
 }

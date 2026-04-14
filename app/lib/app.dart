@@ -1,5 +1,6 @@
 import 'package:fluent_ui/fluent_ui.dart';
 
+import 'screens/history_screen.dart';
 import 'screens/profile_list_screen.dart';
 import 'screens/settings_screen.dart';
 
@@ -9,7 +10,7 @@ class UnisonApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return FluentApp(
-      title: 'Unison',
+      title: 'UniSync',
       themeMode: ThemeMode.system,
       darkTheme: FluentThemeData.dark(),
       theme: FluentThemeData.light(),
@@ -40,6 +41,11 @@ class _AppShellState extends State<AppShell> {
             icon: const Icon(FluentIcons.sync),
             title: const Text('Profiles'),
             body: const ProfileListScreen(),
+          ),
+          PaneItem(
+            icon: const Icon(FluentIcons.history),
+            title: const Text('Time Machine'),
+            body: const HistoryScreen(),
           ),
         ],
         footerItems: [

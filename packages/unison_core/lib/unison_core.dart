@@ -37,6 +37,8 @@ export 'src/backup/stasher.dart';
 // Engine
 export 'src/engine/batch_ops.dart';
 export 'src/engine/files.dart';
+export 'src/engine/history.dart';
+export 'src/engine/moves.dart';
 export 'src/engine/merge.dart';
 export 'src/engine/recon.dart';
 export 'src/engine/sync_engine.dart';
