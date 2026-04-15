@@ -119,7 +119,14 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
 
   /// Start a sync for a profile.
   void scan(String profileName) {
-    _scanAsync(profileName);
+    _scanAsync(profileName).catchError((e) {
+      if (mounted) {
+        state = state.copyWith(
+          phase: AppSyncPhase.error,
+          error: 'Unhandled: $e\n${e is Error ? e.stackTrace : ""}',
+        );
+      }
+    });
   }
 
   Future<void> _scanAsync(String profileName) async {

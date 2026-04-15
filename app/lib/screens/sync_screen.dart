@@ -36,17 +36,17 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
     final state = ref.watch(syncOperationProvider);
     final theme = FluentTheme.of(context);
 
-    return NavigationView(
-      pane: NavigationPane(
-        displayMode: PaneDisplayMode.top,
-        items: [
-          PaneItem(
-            icon: const Icon(FluentIcons.sync),
-            title: Text(widget.profileName),
-            body: _buildBody(context, state, theme),
-          ),
-        ],
+    return ScaffoldPage(
+      header: PageHeader(
+        title: Row(
+          children: [
+            const Icon(FluentIcons.sync),
+            const SizedBox(width: 8),
+            Text(widget.profileName),
+          ],
+        ),
       ),
+      content: _buildBody(context, state, theme),
     );
   }
 

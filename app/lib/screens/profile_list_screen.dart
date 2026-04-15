@@ -224,7 +224,7 @@ class _CreateProfileDialog extends StatefulWidget {
 /// Known WebDAV providers with URL templates.
 const _webdavProviders = <(String, String, String)>[
   ('Nextcloud', 'https://YOUR-SERVER/remote.php/dav/files/USERNAME/', 'Replace YOUR-SERVER and USERNAME'),
-  ('HiDrive (Strato)', 'https://webdav.hidrive.strato.com/', 'Uses your HiDrive login'),
+  ('HiDrive (Strato)', 'https://webdav.hidrive.strato.com/users/USERNAME/', 'Replace USERNAME with your HiDrive username'),
   ('pCloud', 'https://webdav.pcloud.com/', 'Uses your pCloud login'),
   ('Box', 'https://dav.box.com/dav/', 'Uses your Box login'),
   ('4shared', 'https://webdav.4shared.com/', 'Uses your 4shared login'),
