@@ -72,19 +72,26 @@ class WebDavSyncEngine {
   }) async {
     // Phase 0: Ensure remote prefix directory exists
     onProgress?.call(SyncPhase.scanning, 'Preparing remote directory...');
+    Trace.info(TraceCategory.remote, 'Ensuring remote prefix: $_remotePrefix');
     await _webdav.mkdirRecursive(_remotePrefix);
+    Trace.info(TraceCategory.remote, 'Remote prefix ready');
 
     // Phase 1: Load archive
     onProgress?.call(SyncPhase.scanning, 'Loading archive...');
     final archive = _archiveStore.load(_localRoot, _webdavRootKey);
+    Trace.info(TraceCategory.archive, 'Archive loaded: ${archive.runtimeType}');
 
     // Phase 2: Scan local
     onProgress?.call(SyncPhase.scanning, 'Scanning local files...');
+    Trace.info(TraceCategory.update, 'Scanning local: $_localRoot');
     final localUpdates = _scanLocal(archive);
+    Trace.info(TraceCategory.update, 'Local scan done');
 
     // Phase 3: Scan WebDAV (within prefix)
     onProgress?.call(SyncPhase.scanning, 'Scanning remote (WebDAV)...');
+    Trace.info(TraceCategory.remote, 'Scanning remote: $_remotePrefix');
     final webdavUpdates = await _scanWebDav(archive, SyncPath.empty);
+    Trace.info(TraceCategory.remote, 'Remote scan done');
 
     // Phase 4: Reconcile
     onProgress?.call(SyncPhase.reconciling, 'Reconciling...');
@@ -101,9 +108,17 @@ class WebDavSyncEngine {
 
     // Phase 5: Propagate
     onProgress?.call(SyncPhase.propagating, 'Propagating...');
+    Trace.info(TraceCategory.transport,
+        'Propagating ${reconResult.items.length} items');
     final results = <TransportResult>[];
-    for (final item in reconResult.items) {
+    for (var i = 0; i < reconResult.items.length; i++) {
+      final item = reconResult.items[i];
+      onProgress?.call(SyncPhase.propagating,
+          'Item ${i + 1}/${reconResult.items.length}: ${item.path1}');
+      Trace.info(TraceCategory.transport,
+          'Propagating ${item.path1} (${item.direction})');
       final r = await _propagateItem(item);
+      Trace.info(TraceCategory.transport, 'Result: ${r.runtimeType}');
       results.add(r);
     }
 

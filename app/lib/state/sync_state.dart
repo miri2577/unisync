@@ -76,6 +76,7 @@ class SyncOperationState {
   final List<ReconItem> reconItems;
   final SyncResult? result;
   final String? error;
+  final List<String> log;
 
   const SyncOperationState({
     this.phase = AppSyncPhase.idle,
@@ -83,6 +84,7 @@ class SyncOperationState {
     this.reconItems = const [],
     this.result,
     this.error,
+    this.log = const [],
   });
 
   SyncOperationState copyWith({
@@ -91,6 +93,7 @@ class SyncOperationState {
     List<ReconItem>? reconItems,
     SyncResult? result,
     String? error,
+    List<String>? log,
   }) {
     return SyncOperationState(
       phase: phase ?? this.phase,
@@ -98,6 +101,7 @@ class SyncOperationState {
       reconItems: reconItems ?? this.reconItems,
       result: result ?? this.result,
       error: error ?? this.error,
+      log: log ?? this.log,
     );
   }
 }
@@ -116,7 +120,18 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
   final AppSettings _appSettings;
 
   SyncOperationNotifier(this._profileDir, this._appSettings)
-      : super(const SyncOperationState());
+      : super(const SyncOperationState()) {
+    // Pipe core Trace output into the UI log.
+    Trace.handler = (cat, level, msg) {
+      _log('[${cat.name}] $msg');
+    };
+  }
+
+  void _log(String line) {
+    if (!mounted) return;
+    final ts = DateTime.now().toString().substring(11, 19);
+    state = state.copyWith(log: [...state.log, '$ts  $line']);
+  }
 
   /// Start a sync for a profile.
   void scan(String profileName) {
@@ -131,12 +146,10 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
   }
 
   Future<void> _scanAsync(String profileName) async {
-    state = state.copyWith(
+    state = SyncOperationState(
       phase: AppSyncPhase.scanning,
       message: 'Loading profile...',
-      reconItems: [],
-      result: null,
-      error: null,
+      log: ['${DateTime.now().toString().substring(11, 19)}  Starting sync for "$profileName"'],
     );
 
     try {
@@ -165,6 +178,10 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
 
       // Check if root2 is WebDAV
       final isWebDav = root2Str.startsWith('webdav://');
+
+      _log('Root 1: $root1Str');
+      _log('Root 2: $root2Str');
+      _log('Mode: ${isWebDav ? "WebDAV" : "Local"}');
 
       if (isWebDav) {
         await _syncWebDav(profileName, root1Str, prefs);
@@ -215,6 +232,9 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
       return;
     }
 
+    _log('WebDAV URL: $webdavUrl');
+    _log('WebDAV user: $webdavUser');
+
     final webdav = WebDavClient(WebDavConfig(
       baseUrl: webdavUrl,
       username: webdavUser,
@@ -222,9 +242,11 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
     ));
 
     state = state.copyWith(message: 'Connecting to WebDAV...');
+    _log('Testing WebDAV connection (PROPFIND)...');
 
     final connected = await webdav.testConnection();
     if (!connected) {
+      _log('Connection FAILED');
       state = state.copyWith(
         phase: AppSyncPhase.error,
         error: 'Could not connect to WebDAV server: $webdavUrl',
@@ -232,6 +254,7 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
       webdav.close();
       return;
     }
+    _log('Connected OK');
 
     final store = ArchiveStore(_profileDir);
     store.recoverAll();

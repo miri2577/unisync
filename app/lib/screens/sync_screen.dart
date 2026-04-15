@@ -141,39 +141,63 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
 
   Widget _buildContent(SyncOperationState state, FluentThemeData theme) {
     if (state.phase == AppSyncPhase.error) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(FluentIcons.error_badge, size: 48, color: Colors.red),
-            const SizedBox(height: 16),
-            Text('Error', style: theme.typography.subtitle),
-            const SizedBox(height: 8),
-            SelectableText(
-              state.error ?? 'Unknown error',
-              style: theme.typography.body,
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(FluentIcons.error_badge, size: 32, color: Colors.red),
+                const SizedBox(height: 8),
+                Text('Error', style: theme.typography.subtitle),
+                const SizedBox(height: 8),
+                SelectableText(
+                  state.error ?? 'Unknown error',
+                  style: theme.typography.body,
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+          Expanded(child: _buildLogPanel(state, theme)),
+        ],
       );
     }
 
     if (state.phase == AppSyncPhase.idle ||
         state.phase == AppSyncPhase.scanning ||
-        state.phase == AppSyncPhase.reconciling) {
-      return const Center(child: ProgressRing());
+        state.phase == AppSyncPhase.reconciling ||
+        state.phase == AppSyncPhase.propagating) {
+      return Column(
+        children: [
+          const SizedBox(height: 16),
+          const Center(child: ProgressRing()),
+          const SizedBox(height: 8),
+          Center(
+            child: Text(state.message, style: theme.typography.body),
+          ),
+          const SizedBox(height: 16),
+          Expanded(child: _buildLogPanel(state, theme)),
+        ],
+      );
     }
 
     if (state.reconItems.isEmpty && state.phase == AppSyncPhase.done) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(FluentIcons.completed, size: 48, color: Colors.green),
-            const SizedBox(height: 16),
-            Text('Everything is in sync', style: theme.typography.subtitle),
-          ],
-        ),
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(FluentIcons.completed, size: 32, color: Colors.green),
+                const SizedBox(height: 8),
+                Text('Everything is in sync', style: theme.typography.subtitle),
+              ],
+            ),
+          ),
+          Expanded(child: _buildLogPanel(state, theme)),
+        ],
       );
     }
 
@@ -181,8 +205,57 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
     return Column(
       children: [
         _buildBatchBar(state),
-        Expanded(child: _buildReconList(state)),
+        Expanded(
+          flex: 2,
+          child: _buildReconList(state),
+        ),
+        Expanded(child: _buildLogPanel(state, theme)),
       ],
+    );
+  }
+
+  Widget _buildLogPanel(SyncOperationState state, FluentThemeData theme) {
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(color: theme.resources.dividerStrokeColorDefault),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(
+              children: [
+                const Icon(FluentIcons.diagnostic_data_bar_tooltip, size: 12),
+                const SizedBox(width: 6),
+                Text('Log (${state.log.length})',
+                    style: theme.typography.caption),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.04),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: ListView.builder(
+                reverse: true,
+                itemCount: state.log.length,
+                itemBuilder: (_, i) {
+                  final line = state.log[state.log.length - 1 - i];
+                  return SelectableText(
+                    line,
+                    style: const TextStyle(
+                      fontFamily: 'Consolas', fontSize: 11.5,
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

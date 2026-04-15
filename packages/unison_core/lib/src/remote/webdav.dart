@@ -117,6 +117,7 @@ class WebDavClient {
   /// List directory contents via PROPFIND.
   Future<List<WebDavEntry>> listDirectory(String path) async {
     final url = _url(path.isEmpty ? '' : path + (path.endsWith('/') ? '' : '/'));
+    Trace.debug(TraceCategory.remote, 'PROPFIND $url');
 
     final response = await _http.send(http.Request('PROPFIND', Uri.parse(url))
       ..headers.addAll({
@@ -136,6 +137,7 @@ class WebDavClient {
 </d:propfind>''');
 
     final body = await response.stream.bytesToString();
+    Trace.debug(TraceCategory.remote, 'PROPFIND $url -> ${response.statusCode}');
 
     if (response.statusCode != 207) {
       throw WebDavException(
@@ -144,7 +146,9 @@ class WebDavClient {
       );
     }
 
-    return _parsePropfindResponse(body, url);
+    final entries = _parsePropfindResponse(body, url);
+    Trace.debug(TraceCategory.remote, 'PROPFIND $url -> ${entries.length} entries');
+    return entries;
   }
 
   /// List child names of a directory (matching OsFs.childrenOf interface).
@@ -203,10 +207,13 @@ class WebDavClient {
 
   /// Download a file.
   Future<Uint8List> readFile(String path) async {
+    Trace.debug(TraceCategory.remote, 'GET ${_url(path)}');
     final response = await _http.get(
       Uri.parse(_url(path)),
       headers: _headers,
     );
+    Trace.debug(TraceCategory.remote,
+        'GET $path -> ${response.statusCode} (${response.bodyBytes.length}B)');
 
     if (response.statusCode != 200) {
       throw WebDavException(
@@ -227,6 +234,7 @@ class WebDavClient {
 
   /// Upload a file.
   Future<void> writeFile(String path, Uint8List data) async {
+    Trace.debug(TraceCategory.remote, 'PUT ${_url(path)} (${data.length}B)');
     final response = await _http.put(
       Uri.parse(_url(path)),
       headers: {
@@ -235,6 +243,7 @@ class WebDavClient {
       },
       body: data,
     );
+    Trace.debug(TraceCategory.remote, 'PUT $path -> ${response.statusCode}');
 
     if (response.statusCode != 201 &&
         response.statusCode != 204 &&
@@ -248,13 +257,14 @@ class WebDavClient {
 
   /// Create a directory (MKCOL).
   Future<void> mkdir(String path) async {
+    Trace.debug(TraceCategory.remote, 'MKCOL ${_url(path)}');
     final response = await _http.send(
       http.Request('MKCOL', Uri.parse(_url(path)))
         ..headers.addAll(_headers),
     );
 
     final status = response.statusCode;
-    // 201 = created, 405 = already exists (ok)
+    Trace.debug(TraceCategory.remote, 'MKCOL $path -> $status');
     if (status != 201 && status != 405) {
       throw WebDavException('MKCOL failed for $path: $status', status);
     }
@@ -272,10 +282,12 @@ class WebDavClient {
 
   /// Delete a file or directory.
   Future<void> delete(String path) async {
+    Trace.debug(TraceCategory.remote, 'DELETE ${_url(path)}');
     final response = await _http.delete(
       Uri.parse(_url(path)),
       headers: _headers,
     );
+    Trace.debug(TraceCategory.remote, 'DELETE $path -> ${response.statusCode}');
 
     if (response.statusCode != 204 && response.statusCode != 200) {
       throw WebDavException(
