@@ -134,7 +134,7 @@ class WebDavClient {
     <d:getetag/>
     <d:getcontenttype/>
   </d:prop>
-</d:propfind>''');
+</d:propfind>''').timeout(const Duration(seconds: 30));
 
     final body = await response.stream.bytesToString();
     Trace.debug(TraceCategory.remote, 'PROPFIND $url -> ${response.statusCode}');
@@ -194,11 +194,19 @@ class WebDavClient {
 
   /// Check if a path exists.
   Future<bool> exists(String path) async {
-    final response = await _http.head(
-      Uri.parse(_url(path)),
-      headers: _headers,
-    );
-    return response.statusCode == 200 || response.statusCode == 301;
+    final url = _url(path);
+    Trace.debug(TraceCategory.remote, 'HEAD $url');
+    try {
+      final response = await _http.head(
+        Uri.parse(url),
+        headers: _headers,
+      ).timeout(const Duration(seconds: 15));
+      Trace.debug(TraceCategory.remote, 'HEAD $path -> ${response.statusCode}');
+      return response.statusCode == 200 || response.statusCode == 301;
+    } catch (e) {
+      Trace.debug(TraceCategory.remote, 'HEAD $path failed: $e');
+      return false;
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -211,7 +219,7 @@ class WebDavClient {
     final response = await _http.get(
       Uri.parse(_url(path)),
       headers: _headers,
-    );
+    ).timeout(const Duration(minutes: 5));
     Trace.debug(TraceCategory.remote,
         'GET $path -> ${response.statusCode} (${response.bodyBytes.length}B)');
 
@@ -242,7 +250,7 @@ class WebDavClient {
         'Content-Type': 'application/octet-stream',
       },
       body: data,
-    );
+    ).timeout(const Duration(minutes: 10));
     Trace.debug(TraceCategory.remote, 'PUT $path -> ${response.statusCode}');
 
     if (response.statusCode != 201 &&
@@ -256,27 +264,68 @@ class WebDavClient {
   }
 
   /// Create a directory (MKCOL).
+  ///
+  /// Treats existing directories as success (status 405, 409, 301).
+  /// Has a 30s timeout to prevent hangs.
   Future<void> mkdir(String path) async {
-    Trace.debug(TraceCategory.remote, 'MKCOL ${_url(path)}');
-    final response = await _http.send(
-      http.Request('MKCOL', Uri.parse(_url(path)))
-        ..headers.addAll(_headers),
-    );
+    final url = _url(path);
+    Trace.debug(TraceCategory.remote, 'MKCOL $url');
+
+    http.StreamedResponse response;
+    try {
+      response = await _http.send(
+        http.Request('MKCOL', Uri.parse(url))
+          ..headers.addAll(_headers),
+      ).timeout(const Duration(seconds: 30));
+    } on Exception catch (e) {
+      Trace.warning(TraceCategory.remote, 'MKCOL $path failed: $e');
+      throw WebDavException('MKCOL $path: $e', 0);
+    }
 
     final status = response.statusCode;
-    Trace.debug(TraceCategory.remote, 'MKCOL $path -> $status');
-    if (status != 201 && status != 405) {
-      throw WebDavException('MKCOL failed for $path: $status', status);
+    final body = await response.stream.bytesToString().catchError((_) => '');
+    Trace.debug(TraceCategory.remote, 'MKCOL $path -> $status${body.isNotEmpty ? " body=${body.length}B" : ""}');
+
+    // Accept: 201 created, 200 ok, 204 no content,
+    //         405 method not allowed (already exists),
+    //         409 conflict (already exists on some servers),
+    //         301/302/308 redirect to existing collection
+    if (status == 201 || status == 200 || status == 204 ||
+        status == 405 || status == 409 ||
+        status == 301 || status == 302 || status == 308) {
+      return;
     }
+
+    Trace.warning(TraceCategory.remote,
+        'MKCOL $path: unexpected status $status, body: ${body.length > 200 ? "${body.substring(0, 200)}..." : body}');
+    throw WebDavException('MKCOL failed for $path: $status', status);
   }
 
   /// Create directory and all parents.
+  /// Skips MKCOL for directories that already exist (saves round-trips).
   Future<void> mkdirRecursive(String path) async {
     final parts = path.split('/').where((p) => p.isNotEmpty).toList();
     var current = '';
     for (final part in parts) {
       current += '$part/';
-      await mkdir(current);
+      // Cheap existence check first
+      try {
+        if (await exists(current)) {
+          Trace.debug(TraceCategory.remote, 'mkdirRecursive: $current exists, skip');
+          continue;
+        }
+      } catch (_) {
+        // exists() failed, try MKCOL anyway
+      }
+      try {
+        await mkdir(current);
+      } on WebDavException catch (e) {
+        // Tolerate "already exists" type errors at intermediate levels
+        if (e.statusCode == 405 || e.statusCode == 409) {
+          continue;
+        }
+        rethrow;
+      }
     }
   }
 
@@ -286,7 +335,7 @@ class WebDavClient {
     final response = await _http.delete(
       Uri.parse(_url(path)),
       headers: _headers,
-    );
+    ).timeout(const Duration(seconds: 30));
     Trace.debug(TraceCategory.remote, 'DELETE $path -> ${response.statusCode}');
 
     if (response.statusCode != 204 && response.statusCode != 200) {
