@@ -38,6 +38,13 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
 
     return ScaffoldPage(
       header: PageHeader(
+        leading: IconButton(
+          icon: const Icon(FluentIcons.back),
+          onPressed: () {
+            ref.read(syncOperationProvider.notifier).reset();
+            Navigator.of(context).pop();
+          },
+        ),
         title: Row(
           children: [
             const Icon(FluentIcons.sync),

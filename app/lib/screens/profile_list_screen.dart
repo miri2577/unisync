@@ -598,73 +598,77 @@ class _WatchScreenState extends ConsumerState<_WatchScreen> {
   Widget build(BuildContext context) {
     final theme = FluentTheme.of(context);
 
-    return NavigationView(
-      pane: NavigationPane(
-        displayMode: PaneDisplayMode.top,
-        items: [
-          PaneItem(
-            icon: const Icon(FluentIcons.red_eye),
-            title: Text('Watch: ${widget.profileName}'),
-            body: Column(
-              children: [
-                // Status bar
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  decoration: BoxDecoration(
-                    border: Border(
-                      bottom: BorderSide(
-                        color: theme.resources.dividerStrokeColorDefault,
-                      ),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(FluentIcons.back),
-                        onPressed: () {
-                          _controller?.stop();
-                          Navigator.of(context).pop();
-                        },
-                      ),
-                      const SizedBox(width: 12),
-                      if (_running)
-                        const Padding(
-                          padding: EdgeInsets.only(right: 8),
-                          child: SizedBox(
-                            width: 16, height: 16,
-                            child: ProgressRing(strokeWidth: 2),
-                          ),
-                        ),
-                      Text(
-                        _running ? 'Watching for changes...' : 'Stopped',
-                        style: theme.typography.body,
-                      ),
-                      const Spacer(),
-                      Button(
-                        onPressed: () {
-                          _controller?.stop();
-                          setState(() {
-                            _running = false;
-                            _log.add('[${_time()}] Stopped');
-                          });
-                        },
-                        child: const Text('Stop'),
-                      ),
-                    ],
-                  ),
+    return ScaffoldPage(
+      header: PageHeader(
+        leading: IconButton(
+          icon: const Icon(FluentIcons.back),
+          onPressed: () async {
+            await _controller?.stop();
+            if (context.mounted) Navigator.of(context).pop();
+          },
+        ),
+        title: Row(
+          children: [
+            const Icon(FluentIcons.red_eye),
+            const SizedBox(width: 8),
+            Text('Watch: ${widget.profileName}'),
+          ],
+        ),
+        commandBar: CommandBar(
+          mainAxisAlignment: MainAxisAlignment.end,
+          primaryItems: [
+            CommandBarButton(
+              icon: const Icon(FluentIcons.stop),
+              label: const Text('Stop'),
+              onPressed: () async {
+                await _controller?.stop();
+                if (mounted) {
+                  setState(() {
+                    _running = false;
+                    _log.add('[${_time()}] Stopped');
+                  });
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+      content: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: theme.resources.dividerStrokeColorDefault,
                 ),
-                // Log
-                Expanded(
-                  child: ListView.builder(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: _log.length,
-                    itemBuilder: (_, i) => Text(
-                      _log[i],
-                      style: const TextStyle(fontFamily: 'Consolas', fontSize: 13),
+              ),
+            ),
+            child: Row(
+              children: [
+                if (_running)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 8),
+                    child: SizedBox(
+                      width: 16, height: 16,
+                      child: ProgressRing(strokeWidth: 2),
                     ),
                   ),
+                Text(
+                  _running ? 'Watching for changes...' : 'Stopped',
+                  style: theme.typography.body,
                 ),
               ],
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: _log.length,
+              itemBuilder: (_, i) => Text(
+                _log[i],
+                style: const TextStyle(fontFamily: 'Consolas', fontSize: 13),
+              ),
             ),
           ),
         ],

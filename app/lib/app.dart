@@ -1,4 +1,5 @@
 import 'package:fluent_ui/fluent_ui.dart';
+import 'package:flutter/services.dart';
 
 import 'screens/history_screen.dart';
 import 'screens/profile_list_screen.dart';
@@ -14,8 +15,32 @@ class UnisonApp extends StatelessWidget {
       themeMode: ThemeMode.system,
       darkTheme: FluentThemeData.dark(),
       theme: FluentThemeData.light(),
+      // ESC = navigate back globally
+      shortcuts: <ShortcutActivator, Intent>{
+        ...WidgetsApp.defaultShortcuts,
+        const SingleActivator(LogicalKeyboardKey.escape): const _BackIntent(),
+      },
+      actions: <Type, Action<Intent>>{
+        ...WidgetsApp.defaultActions,
+        _BackIntent: _BackAction(),
+      },
       home: const AppShell(),
     );
+  }
+}
+
+class _BackIntent extends Intent {
+  const _BackIntent();
+}
+
+class _BackAction extends Action<_BackIntent> {
+  @override
+  Object? invoke(_BackIntent intent) {
+    final ctx = primaryFocus?.context;
+    if (ctx != null && Navigator.of(ctx).canPop()) {
+      Navigator.of(ctx).pop();
+    }
+    return null;
   }
 }
 
