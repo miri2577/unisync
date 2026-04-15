@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -133,8 +134,21 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
     state = state.copyWith(log: [...state.log, '$ts  $line']);
   }
 
+  bool _cancelled = false;
+
+  /// Cancel the running sync (best-effort).
+  void cancel() {
+    _cancelled = true;
+    _log('!!! User requested cancel');
+    state = state.copyWith(
+      phase: AppSyncPhase.error,
+      error: 'Cancelled by user',
+    );
+  }
+
   /// Start a sync for a profile.
   void scan(String profileName) {
+    _cancelled = false;
     _scanAsync(profileName).catchError((e) {
       if (mounted) {
         state = state.copyWith(
@@ -266,20 +280,39 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
       archiveStore: store,
     );
 
-    final result = await engine.sync(
-      onProgress: (phase, msg) {
-        final appPhase = switch (phase) {
-          SyncPhase.scanning => AppSyncPhase.scanning,
-          SyncPhase.reconciling => AppSyncPhase.reconciling,
-          SyncPhase.propagating => AppSyncPhase.propagating,
-          SyncPhase.updatingArchive => AppSyncPhase.propagating,
-          SyncPhase.done => AppSyncPhase.done,
-        };
-        state = state.copyWith(phase: appPhase, message: msg);
-      },
-    );
+    // Top-level safety: hard 5-minute timeout on the entire sync.
+    // If anything truly hangs, this guarantees we recover.
+    SyncResult result;
+    try {
+      result = await engine.sync(
+        onProgress: (phase, msg) {
+          if (_cancelled) return;
+          final appPhase = switch (phase) {
+            SyncPhase.scanning => AppSyncPhase.scanning,
+            SyncPhase.reconciling => AppSyncPhase.reconciling,
+            SyncPhase.propagating => AppSyncPhase.propagating,
+            SyncPhase.updatingArchive => AppSyncPhase.propagating,
+            SyncPhase.done => AppSyncPhase.done,
+          };
+          state = state.copyWith(phase: appPhase, message: msg);
+        },
+      ).timeout(const Duration(minutes: 5), onTimeout: () {
+        _log('!!! Top-level timeout (5 min) — aborting');
+        throw TimeoutException('Sync exceeded 5 minute timeout');
+      });
+    } catch (e) {
+      webdav.close();
+      _log('!!! Sync error: $e');
+      state = state.copyWith(
+        phase: AppSyncPhase.error,
+        error: '$e',
+      );
+      return;
+    }
 
     webdav.close();
+
+    if (_cancelled) return;
 
     state = state.copyWith(
       phase: AppSyncPhase.done,

@@ -57,6 +57,15 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
         commandBar: CommandBar(
           mainAxisAlignment: MainAxisAlignment.end,
           primaryItems: [
+            if (state.phase == AppSyncPhase.scanning ||
+                state.phase == AppSyncPhase.reconciling ||
+                state.phase == AppSyncPhase.propagating)
+              CommandBarButton(
+                icon: const Icon(FluentIcons.cancel),
+                label: const Text('Cancel'),
+                onPressed: () =>
+                    ref.read(syncOperationProvider.notifier).cancel(),
+              ),
             CommandBarButton(
               icon: Icon(_showLog ? FluentIcons.hide : FluentIcons.diagnostic_data_bar_tooltip),
               label: Text(_showLog ? 'Hide Log' : 'Show Log'),

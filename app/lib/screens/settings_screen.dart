@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../state/settings_state.dart';
 import '../state/sync_state.dart';
+import 'help_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -29,7 +30,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final profileDir = ref.watch(profileDirProvider);
 
     return ScaffoldPage(
-      header: const PageHeader(title: Text('Settings')),
+      header: PageHeader(
+        title: const Text('Settings'),
+        commandBar: CommandBar(
+          mainAxisAlignment: MainAxisAlignment.end,
+          primaryItems: [
+            CommandBarButton(
+              icon: const Icon(FluentIcons.help),
+              label: const Text('Help'),
+              onPressed: () => Navigator.of(context).push(
+                FluentPageRoute(builder: (_) => const HelpScreen()),
+              ),
+            ),
+          ],
+        ),
+      ),
       content: Row(
         children: [
           SizedBox(

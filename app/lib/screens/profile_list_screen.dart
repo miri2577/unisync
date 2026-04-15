@@ -8,6 +8,7 @@ import 'package:unison_core/unison_core.dart';
 import '../state/credentials.dart';
 import '../state/settings_state.dart';
 import '../state/sync_state.dart';
+import 'help_screen.dart';
 import 'sync_screen.dart';
 
 class ProfileListScreen extends ConsumerWidget {
@@ -33,6 +34,13 @@ class ProfileListScreen extends ConsumerWidget {
               label: const Text('Refresh'),
               onPressed: () =>
                   ref.read(profileListProvider.notifier).refresh(),
+            ),
+            CommandBarButton(
+              icon: const Icon(FluentIcons.help),
+              label: const Text('Help'),
+              onPressed: () => Navigator.of(context).push(
+                FluentPageRoute(builder: (_) => const HelpScreen()),
+              ),
             ),
           ],
         ),
