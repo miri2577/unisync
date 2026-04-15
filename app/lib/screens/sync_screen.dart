@@ -18,6 +18,8 @@ class SyncScreen extends ConsumerStatefulWidget {
 }
 
 class _SyncScreenState extends ConsumerState<SyncScreen> {
+  bool _showLog = true;
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +52,16 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
             const Icon(FluentIcons.sync),
             const SizedBox(width: 8),
             Text(widget.profileName),
+          ],
+        ),
+        commandBar: CommandBar(
+          mainAxisAlignment: MainAxisAlignment.end,
+          primaryItems: [
+            CommandBarButton(
+              icon: Icon(_showLog ? FluentIcons.hide : FluentIcons.diagnostic_data_bar_tooltip),
+              label: Text(_showLog ? 'Hide Log' : 'Show Log'),
+              onPressed: () => setState(() => _showLog = !_showLog),
+            ),
           ],
         ),
       ),
@@ -159,7 +171,7 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
               ],
             ),
           ),
-          Expanded(child: _buildLogPanel(state, theme)),
+          if (_showLog) Expanded(child: _buildLogPanel(state, theme)),
         ],
       );
     }
@@ -177,7 +189,7 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
             child: Text(state.message, style: theme.typography.body),
           ),
           const SizedBox(height: 16),
-          Expanded(child: _buildLogPanel(state, theme)),
+          if (_showLog) Expanded(child: _buildLogPanel(state, theme)),
         ],
       );
     }
@@ -196,7 +208,7 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
               ],
             ),
           ),
-          Expanded(child: _buildLogPanel(state, theme)),
+          if (_showLog) Expanded(child: _buildLogPanel(state, theme)),
         ],
       );
     }
@@ -206,10 +218,10 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
       children: [
         _buildBatchBar(state),
         Expanded(
-          flex: 2,
+          flex: _showLog ? 2 : 1,
           child: _buildReconList(state),
         ),
-        Expanded(child: _buildLogPanel(state, theme)),
+        if (_showLog) Expanded(child: _buildLogPanel(state, theme)),
       ],
     );
   }
