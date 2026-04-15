@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:unison_core/unison_core.dart';
 
+import 'credentials.dart';
 import 'settings_state.dart';
 
 /// Current sync operation phase.
@@ -182,15 +183,34 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
   Future<void> _syncWebDav(String profileName, String root1Str, UnisonPrefs prefs) async {
     final root1 = Fspath.fromLocal(root1Str);
 
-    // Read WebDAV config from profile
+    // Read WebDAV URL/username from profile, password from secure storage
     final webdavUrl = (prefs.registry.get('webdavurl') as Pref<String>?)?.value ?? '';
     final webdavUser = (prefs.registry.get('webdavuser') as Pref<String>?)?.value ?? '';
-    final webdavPass = (prefs.registry.get('webdavpass') as Pref<String>?)?.value ?? '';
+    var webdavPass = await Credentials.getPassword(profileName) ?? '';
+
+    // Backward compat: legacy profiles may still have webdavpass in .prf
+    if (webdavPass.isEmpty) {
+      final legacyPass = (prefs.registry.get('webdavpass') as Pref<String>?)?.value ?? '';
+      if (legacyPass.isNotEmpty) {
+        // Migrate to secure storage and remove from profile on next save
+        webdavPass = legacyPass;
+        await Credentials.setPassword(profileName, legacyPass);
+      }
+    }
 
     if (webdavUrl.isEmpty || webdavUser.isEmpty) {
       state = state.copyWith(
         phase: AppSyncPhase.error,
         error: 'WebDAV URL and username are required',
+      );
+      return;
+    }
+
+    if (webdavPass.isEmpty) {
+      state = state.copyWith(
+        phase: AppSyncPhase.error,
+        error: 'No password stored for profile "$profileName".\n'
+            'Edit the profile to enter your WebDAV password.',
       );
       return;
     }

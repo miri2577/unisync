@@ -5,6 +5,7 @@ import 'package:fluent_ui/fluent_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:unison_core/unison_core.dart';
 
+import '../state/credentials.dart';
 import '../state/settings_state.dart';
 import '../state/sync_state.dart';
 import 'sync_screen.dart';
@@ -143,6 +144,14 @@ class _ProfileCard extends ConsumerWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                if (profile.roots.any((r) => r.startsWith('webdav://')))
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: IconButton(
+                      icon: const Icon(FluentIcons.permissions, size: 14),
+                      onPressed: () => _setPassword(context),
+                    ),
+                  ),
                 Button(
                   onPressed: () => _deleteProfile(context, ref),
                   child: const Text('Delete'),
@@ -170,6 +179,46 @@ class _ProfileCard extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _setPassword(BuildContext context) async {
+    final controller = TextEditingController();
+    final stored = await Credentials.getPassword(profile.name);
+    if (stored != null) controller.text = stored;
+
+    if (!context.mounted) return;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => ContentDialog(
+        title: Text('WebDAV Password for "${profile.name}"'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Stored securely in your OS keyring (DPAPI/Keychain).'),
+            const SizedBox(height: 12),
+            PasswordBox(
+              controller: controller,
+              placeholder: 'Enter password',
+            ),
+          ],
+        ),
+        actions: [
+          Button(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.isNotEmpty) {
+      await Credentials.setPassword(profile.name, result);
+    }
   }
 
   void _startSync(BuildContext context, WidgetRef ref) {
@@ -207,6 +256,7 @@ class _ProfileCard extends ConsumerWidget {
       ),
     );
     if (confirmed == true) {
+      await Credentials.deletePassword(profile.name);
       ref.read(profileListProvider.notifier).deleteProfile(profile.name);
     }
   }
@@ -423,7 +473,7 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
     }
   }
 
-  void _create() {
+  Future<void> _create() async {
     final name = _nameController.text.trim();
     final root1 = _root1Controller.text.trim();
 
@@ -431,6 +481,7 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
 
     String root2;
     String extraConfig = '';
+    String? passwordToStore;
 
     if (_root2Type == 'webdav') {
       final url = _webdavUrlController.text.trim();
@@ -438,21 +489,27 @@ class _CreateProfileDialogState extends State<_CreateProfileDialog> {
       final pass = _webdavPassController.text.trim();
       if (url.isEmpty || user.isEmpty) return;
       root2 = 'webdav://$url';
+      // Password goes to OS keyring, NOT into .prf file
       extraConfig = 'webdavurl = $url\n'
-          'webdavuser = $user\n'
-          'webdavpass = $pass\n';
+          'webdavuser = $user\n';
+      passwordToStore = pass;
     } else {
       root2 = _root2Controller.text.trim();
       if (root2.isEmpty) return;
     }
 
-    // Create profile with optional WebDAV config
+    // Save password securely (Windows Credential Manager / macOS Keychain)
+    if (passwordToStore != null && passwordToStore.isNotEmpty) {
+      await Credentials.setPassword(name, passwordToStore);
+    }
+
+    // Create profile WITHOUT password
     final profileDir = widget.ref.read(profileDirProvider);
     Directory(profileDir).createSync(recursive: true);
     final content = 'root = $root1\nroot = $root2\n$extraConfig';
     File('$profileDir/$name.prf').writeAsStringSync(content);
     widget.ref.read(profileListProvider.notifier).refresh();
-    Navigator.pop(context);
+    if (mounted) Navigator.pop(context);
   }
 }
 
