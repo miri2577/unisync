@@ -34,15 +34,19 @@ class UpdateConfig {
   final bool Function(SyncPath path)? shouldIgnore;
 
   /// Predicate for symlinks that should be followed transparently.
-  /// When a symlink matches, it is treated as the target (file/dir)
-  /// rather than as a symlink. Cycle detection prevents infinite loops.
   final bool Function(SyncPath path)? shouldFollow;
+
+  /// Use pseudo-fingerprints for NEW files instead of computing MD5.
+  /// Massively speeds up first sync of large folders. Pseudo-fp is
+  /// based on path+size, so changes only get detected later via mtime.
+  final bool usePseudoFingerprintForNewFiles;
 
   const UpdateConfig({
     this.useFastCheck = true,
     this.fatTolerance = false,
     this.shouldIgnore,
     this.shouldFollow,
+    this.usePseudoFingerprintForNewFiles = false,
   });
 }
 
@@ -222,6 +226,8 @@ class UpdateDetector {
     ArchiveDir archived,
     UpdateConfig config,
   ) {
+    Trace.debug(TraceCategory.update,
+        'Scanning dir: ${path.isEmpty ? "(root)" : path}');
     // dirStamp optimization: if directory mtime is unchanged and fast-check
     // is enabled, check if the children list matches the archive.
     // If both match, we can skip recursing into this directory entirely.
@@ -335,14 +341,23 @@ class UpdateDetector {
   ) {
     switch (info.typ) {
       case FileType.file:
+        Trace.debug(TraceCategory.update,
+            'New file: $path (${info.desc.length} B)');
         Fingerprint fp;
         try {
-          fp = _fingerprintService.file(root, path);
+          if (config.usePseudoFingerprintForNewFiles) {
+            // Skip MD5 — use cheap pseudo-fingerprint (path + size hash)
+            fp = Fingerprint.pseudo(path.toString(), info.desc.length);
+          } else {
+            fp = _fingerprintService.file(root, path);
+          }
         } catch (e) {
           return (UpdateError('Cannot fingerprint new file $path: $e'), const NoArchive());
         }
         final fullPath = root.concat(path).toLocal();
-        _fpCache.put(fullPath, info.desc, fp);
+        if (!fp.isPseudo) {
+          _fpCache.put(fullPath, info.desc, fp);
+        }
 
         final fullFp = FullFingerprint(fp);
         return (
@@ -518,9 +533,16 @@ class UpdateDetector {
 
     switch (info.typ) {
       case FileType.file:
-        final fp = _fingerprintService.file(root, path);
-        final fullPath = root.concat(path).toLocal();
-        _fpCache.put(fullPath, info.desc, fp);
+        Trace.debug(TraceCategory.archive,
+            'Archive: $path (${info.desc.length} B)');
+        Fingerprint fp;
+        if (config.usePseudoFingerprintForNewFiles) {
+          fp = Fingerprint.pseudo(path.toString(), info.desc.length);
+        } else {
+          fp = _fingerprintService.file(root, path);
+          final fullPath = root.concat(path).toLocal();
+          _fpCache.put(fullPath, info.desc, fp);
+        }
         return ArchiveFile(
           info.desc,
           FullFingerprint(fp),

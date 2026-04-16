@@ -136,8 +136,12 @@ class WebDavClient {
   </d:prop>
 </d:propfind>''').timeout(const Duration(seconds: 30));
 
-    final body = await response.stream.bytesToString();
-    Trace.debug(TraceCategory.remote, 'PROPFIND $url -> ${response.statusCode}');
+    final body = await response.stream.bytesToString()
+        .timeout(const Duration(seconds: 30), onTimeout: () {
+      Trace.warning(TraceCategory.remote, 'PROPFIND body read timeout');
+      return '';
+    });
+    Trace.debug(TraceCategory.remote, 'PROPFIND $url -> ${response.statusCode} (body ${body.length}B)');
 
     if (response.statusCode != 207) {
       throw WebDavException(
@@ -197,10 +201,17 @@ class WebDavClient {
     final url = _url(path);
     Trace.debug(TraceCategory.remote, 'HEAD $url');
     try {
-      final response = await _http.head(
-        Uri.parse(url),
-        headers: _headers,
-      ).timeout(const Duration(seconds: 15));
+      // Use streamed send so we can drop the body without blocking
+      final req = http.Request('HEAD', Uri.parse(url))
+        ..headers.addAll(_headers);
+      final response = await _http.send(req)
+          .timeout(const Duration(seconds: 10));
+      // Drain in background
+      Future.microtask(() async {
+        try {
+          await response.stream.drain<void>().timeout(const Duration(seconds: 3));
+        } catch (_) {}
+      });
       Trace.debug(TraceCategory.remote, 'HEAD $path -> ${response.statusCode}');
       return response.statusCode == 200 || response.statusCode == 301;
     } catch (e) {
@@ -242,15 +253,23 @@ class WebDavClient {
 
   /// Upload a file.
   Future<void> writeFile(String path, Uint8List data) async {
-    Trace.debug(TraceCategory.remote, 'PUT ${_url(path)} (${data.length}B)');
-    final response = await _http.put(
-      Uri.parse(_url(path)),
-      headers: {
+    final url = _url(path);
+    Trace.debug(TraceCategory.remote, 'PUT $url (${data.length}B)');
+    final req = http.Request('PUT', Uri.parse(url))
+      ..headers.addAll({
         ..._headers,
         'Content-Type': 'application/octet-stream',
-      },
-      body: data,
-    ).timeout(const Duration(minutes: 10));
+        'Content-Length': '${data.length}',
+      })
+      ..bodyBytes = data;
+    final response = await _http.send(req)
+        .timeout(const Duration(minutes: 10));
+    // Drain body in background — server may keep stream open
+    Future.microtask(() async {
+      try {
+        await response.stream.drain<void>().timeout(const Duration(seconds: 5));
+      } catch (_) {}
+    });
     Trace.debug(TraceCategory.remote, 'PUT $path -> ${response.statusCode}');
 
     if (response.statusCode != 201 &&
@@ -276,15 +295,21 @@ class WebDavClient {
       response = await _http.send(
         http.Request('MKCOL', Uri.parse(url))
           ..headers.addAll(_headers),
-      ).timeout(const Duration(seconds: 30));
+      ).timeout(const Duration(seconds: 15));
     } on Exception catch (e) {
       Trace.warning(TraceCategory.remote, 'MKCOL $path failed: $e');
       throw WebDavException('MKCOL $path: $e', 0);
     }
 
     final status = response.statusCode;
-    final body = await response.stream.bytesToString().catchError((_) => '');
-    Trace.debug(TraceCategory.remote, 'MKCOL $path -> $status${body.isNotEmpty ? " body=${body.length}B" : ""}');
+    Trace.debug(TraceCategory.remote, 'MKCOL $path -> $status');
+    // Drain the response body in the background with hard timeout — DON'T await it.
+    // Some servers (HiDrive) hold the stream open via keep-alive after MKCOL.
+    Future.microtask(() async {
+      try {
+        await response.stream.drain<void>().timeout(const Duration(seconds: 5));
+      } catch (_) {/* ignore */}
+    });
 
     // Accept: 201 created, 200 ok, 204 no content,
     //         405 method not allowed (already exists),
@@ -297,7 +322,7 @@ class WebDavClient {
     }
 
     Trace.warning(TraceCategory.remote,
-        'MKCOL $path: unexpected status $status, body: ${body.length > 200 ? "${body.substring(0, 200)}..." : body}');
+        'MKCOL $path: unexpected status $status');
     throw WebDavException('MKCOL failed for $path: $status', status);
   }
 
@@ -331,11 +356,17 @@ class WebDavClient {
 
   /// Delete a file or directory.
   Future<void> delete(String path) async {
-    Trace.debug(TraceCategory.remote, 'DELETE ${_url(path)}');
-    final response = await _http.delete(
-      Uri.parse(_url(path)),
-      headers: _headers,
-    ).timeout(const Duration(seconds: 30));
+    final url = _url(path);
+    Trace.debug(TraceCategory.remote, 'DELETE $url');
+    final req = http.Request('DELETE', Uri.parse(url))
+      ..headers.addAll(_headers);
+    final response = await _http.send(req)
+        .timeout(const Duration(seconds: 30));
+    Future.microtask(() async {
+      try {
+        await response.stream.drain<void>().timeout(const Duration(seconds: 5));
+      } catch (_) {}
+    });
     Trace.debug(TraceCategory.remote, 'DELETE $path -> ${response.statusCode}');
 
     if (response.statusCode != 204 && response.statusCode != 200) {

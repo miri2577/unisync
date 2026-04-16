@@ -122,27 +122,56 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
 
   SyncOperationNotifier(this._profileDir, this._appSettings)
       : super(const SyncOperationState()) {
-    // Pipe core Trace output into the UI log.
+    // Pipe core Trace output into the UI log AND a file.
     Trace.handler = (cat, level, msg) {
       _log('[${cat.name}] $msg');
     };
+    // Open log file for the session
+    try {
+      final file = File('$_profileDir/unisync.log');
+      file.parent.createSync(recursive: true);
+      _logFile = file.openSync(mode: FileMode.writeOnlyAppend);
+      _logFile?.writeStringSync(
+        '\n=== UniSync session started ${DateTime.now()} ===\n',
+      );
+    } catch (_) {}
   }
 
+  RandomAccessFile? _logFile;
+
   void _log(String line) {
+    final ts = DateTime.now().toString().substring(11, 23);
+    final entry = '$ts  $line';
+    // Always write to file (even after dispose)
+    try {
+      _logFile?.writeStringSync('$entry\n');
+      _logFile?.flushSync();
+    } catch (_) {}
     if (!mounted) return;
-    final ts = DateTime.now().toString().substring(11, 19);
-    state = state.copyWith(log: [...state.log, '$ts  $line']);
+    state = state.copyWith(log: [...state.log, entry]);
+  }
+
+  /// Path to the log file.
+  String get logFilePath => '$_profileDir/unisync.log';
+
+  @override
+  void dispose() {
+    try {
+      _logFile?.closeSync();
+    } catch (_) {}
+    super.dispose();
   }
 
   bool _cancelled = false;
+  WebDavClient? _activeWebdav;
 
-  /// Cancel the running sync (best-effort).
+  /// Cancel the running sync (cooperative).
+  /// The propagation loop checks the flag between items and stops cleanly.
   void cancel() {
     _cancelled = true;
-    _log('!!! User requested cancel');
+    _log('!!! User requested cancel — finishing current item then stopping');
     state = state.copyWith(
-      phase: AppSyncPhase.error,
-      error: 'Cancelled by user',
+      message: 'Cancelling — finishing current item...',
     );
   }
 
@@ -254,6 +283,7 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
       username: webdavUser,
       password: webdavPass,
     ));
+    _activeWebdav = webdav;
 
     state = state.copyWith(message: 'Connecting to WebDAV...');
     _log('Testing WebDAV connection (PROPFIND)...');
@@ -266,6 +296,7 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
         error: 'Could not connect to WebDAV server: $webdavUrl',
       );
       webdav.close();
+    _activeWebdav = null;
       return;
     }
     _log('Connected OK');
@@ -280,11 +311,13 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
       archiveStore: store,
     );
 
-    // Top-level safety: hard 5-minute timeout on the entire sync.
-    // If anything truly hangs, this guarantees we recover.
+    // No top-level timeout: per-request timeouts (10min PUT, 15s MKCOL,
+    // 30s PROPFIND) handle real hangs. Large folders can legitimately
+    // take hours to upload.
     SyncResult result;
     try {
       result = await engine.sync(
+        isCancelled: () => _cancelled,
         onProgress: (phase, msg) {
           if (_cancelled) return;
           final appPhase = switch (phase) {
@@ -296,12 +329,10 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
           };
           state = state.copyWith(phase: appPhase, message: msg);
         },
-      ).timeout(const Duration(minutes: 5), onTimeout: () {
-        _log('!!! Top-level timeout (5 min) — aborting');
-        throw TimeoutException('Sync exceeded 5 minute timeout');
-      });
+      );
     } catch (e) {
       webdav.close();
+    _activeWebdav = null;
       _log('!!! Sync error: $e');
       state = state.copyWith(
         phase: AppSyncPhase.error,
@@ -311,6 +342,7 @@ class SyncOperationNotifier extends StateNotifier<SyncOperationState> {
     }
 
     webdav.close();
+    _activeWebdav = null;
 
     if (_cancelled) return;
 
