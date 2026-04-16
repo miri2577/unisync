@@ -150,15 +150,38 @@ class UpdateDetector {
   ) {
     final fullPath = root.concat(path).toLocal();
 
-    // Fast-check: skip fingerprint if metadata unchanged
+    // Primary fast-check: compare current mtime+size against ARCHIVE.
+    // This is the core optimization — if file stats match the archive,
+    // the file hasn't changed. No fingerprint computation needed.
     if (config.useFastCheck) {
-      final cachedFp = _fpCache.getCachedFingerprint(fullPath, info.desc);
-      if (cachedFp != null && cachedFp == archived.fingerprint.dataFork) {
-        // Content unchanged — check props only
+      if (info.desc.length == archived.desc.length &&
+          info.desc.modTime.millisecondsSinceEpoch ==
+              archived.desc.modTime.millisecondsSinceEpoch) {
+        // Stats match archive — file is unchanged
         if (info.desc.similar(archived.desc, fatTolerance: config.fatTolerance)) {
           return (const NoUpdates(), archived);
         }
-        // Props changed, content same
+        // Only props changed (permissions), content same
+        return (
+          Updates(
+            FileContent(info.desc, const ContentsSame()),
+            PrevFile(
+              archived.desc,
+              archived.fingerprint,
+              archived.stamp,
+              archived.ressStamp,
+            ),
+          ),
+          archived,
+        );
+      }
+
+      // Secondary: check FpCache (for files we already hashed this session)
+      final cachedFp = _fpCache.getCachedFingerprint(fullPath, info.desc);
+      if (cachedFp != null && cachedFp == archived.fingerprint.dataFork) {
+        if (info.desc.similar(archived.desc, fatTolerance: config.fatTolerance)) {
+          return (const NoUpdates(), archived);
+        }
         return (
           Updates(
             FileContent(info.desc, const ContentsSame()),
