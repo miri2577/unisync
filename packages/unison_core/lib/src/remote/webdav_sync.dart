@@ -368,21 +368,20 @@ class WebDavSyncEngine {
     if (archive case ArchiveFile(desc: var arDesc, fingerprint: var arFp)) {
       final currentFp = _etagFingerprint(entry);
 
-      // Primary check: if ETag-based fingerprint matches archive → unchanged
+      // Primary check: ETag fingerprint matches archive → unchanged
       if (currentFp == arFp.dataFork) {
         return const NoUpdates();
       }
 
-      // Secondary check: size + mtime (for servers without stable ETags)
-      if (entry.size == arDesc.length &&
-          entry.lastModified != null &&
-          entry.lastModified!.difference(arDesc.modTime).inSeconds.abs() <= 2 &&
-          arFp.dataFork.isPseudo) {
-        // Pseudo-FP in archive + same size/mtime → trust it
+      // Size-only check: WebDAV uploads don't preserve mtime, so we
+      // can't compare timestamps. If size matches and archive has a
+      // pseudo-FP (from local scan), trust it — the file hasn't changed
+      // on the server since we uploaded it.
+      if (entry.size == arDesc.length) {
         return const NoUpdates();
       }
 
-      // File changed on remote
+      // File changed on remote (different size)
       final desc = Props(
         permissions: 0x1ED,
         modTime: entry.lastModified ?? DateTime.now(),
@@ -654,8 +653,14 @@ class WebDavSyncEngine {
 
     switch (source.content) {
       case FileContent():
-        final data = await _webdav.readFile(_remotePath(path));
         final localPath = _localRoot.concat(path).toLocal();
+        // Safety: if local path is a directory, skip (can't overwrite dir with file)
+        if (Directory(localPath).existsSync()) {
+          Trace.warning(TraceCategory.transport,
+              'Skip download $path: local path is a directory');
+          return;
+        }
+        final data = await _webdav.readFile(_remotePath(path));
         final parent = File(localPath).parent;
         if (!parent.existsSync()) parent.createSync(recursive: true);
         File(localPath).writeAsBytesSync(data);
@@ -683,8 +688,13 @@ class WebDavSyncEngine {
         Trace.info(TraceCategory.transport,
             'Download: $path (${desc.length} B)');
         try {
-          final data = await _webdav.readFile(_remotePath(path));
           final localPath = _localRoot.concat(path).toLocal();
+          if (Directory(localPath).existsSync()) {
+            Trace.warning(TraceCategory.transport,
+                'Skip download $path: local is a directory');
+            return;
+          }
+          final data = await _webdav.readFile(_remotePath(path));
           final parent = File(localPath).parent;
           if (!parent.existsSync()) parent.createSync(recursive: true);
           File(localPath).writeAsBytesSync(data);
