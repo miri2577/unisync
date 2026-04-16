@@ -28,6 +28,7 @@ import '../model/sync_path.dart';
 import '../model/update_item.dart';
 import '../engine/history.dart';
 import '../engine/update.dart';
+import '../transfer/rsync.dart';
 import '../util/trace.dart';
 import 'webdav.dart';
 
@@ -109,15 +110,18 @@ class WebDavSyncEngine {
     final webdavUpdates = await _scanWebDav(archive, SyncPath.empty);
     Trace.info(TraceCategory.remote, 'Remote scan done');
 
-    // Phase 4: Reconcile
+    // Phase 4: Reconcile — flatten DirContent trees into per-file items
+    // so each file gets its own ReconItem with direction arrow in the UI.
     onProgress?.call(SyncPhase.reconciling, 'Reconciling...');
     const reconciler = Reconciler();
-    final reconResult = reconciler.reconcileUpdates(
-      SyncPath.empty,
-      localUpdates,
-      webdavUpdates,
-      const ReconConfig(),
-    );
+
+    // Flatten the two update trees into per-path triples
+    final flatUpdates = <(SyncPath, UpdateItem, UpdateItem)>[];
+    _flattenPair(SyncPath.empty, localUpdates, webdavUpdates, flatUpdates);
+    Trace.info(TraceCategory.recon,
+        'Flattened to ${flatUpdates.length} path-pairs');
+
+    final reconResult = reconciler.reconcileAll(flatUpdates, const ReconConfig());
 
     Trace.info(TraceCategory.general,
         'WebDAV reconciliation: ${reconResult.items.length} items');
@@ -362,24 +366,31 @@ class WebDavSyncEngine {
 
   UpdateItem _compareFileEntry(WebDavEntry entry, Archive archive, SyncPath path) {
     if (archive case ArchiveFile(desc: var arDesc, fingerprint: var arFp)) {
-      // Compare by size + mtime (can't fingerprint remote without downloading)
-      if (entry.size == arDesc.length &&
-          entry.lastModified != null &&
-          entry.lastModified!.difference(arDesc.modTime).inSeconds.abs() <= 2) {
+      final currentFp = _etagFingerprint(entry);
+
+      // Primary check: if ETag-based fingerprint matches archive → unchanged
+      if (currentFp == arFp.dataFork) {
         return const NoUpdates();
       }
 
-      // Changed
+      // Secondary check: size + mtime (for servers without stable ETags)
+      if (entry.size == arDesc.length &&
+          entry.lastModified != null &&
+          entry.lastModified!.difference(arDesc.modTime).inSeconds.abs() <= 2 &&
+          arFp.dataFork.isPseudo) {
+        // Pseudo-FP in archive + same size/mtime → trust it
+        return const NoUpdates();
+      }
+
+      // File changed on remote
       final desc = Props(
         permissions: 0x1ED,
         modTime: entry.lastModified ?? DateTime.now(),
         length: entry.size,
       );
-      // Use a pseudo-fingerprint based on etag/size
-      final fp = _pseudoFp(entry);
       return Updates(
         FileContent(desc, ContentsUpdated(
-          FullFingerprint(fp), const NoStamp(), RessStamp.zero,
+          FullFingerprint(currentFp), const NoStamp(), RessStamp.zero,
         )),
         PrevFile(arDesc, arFp, const NoStamp(), RessStamp.zero),
       );
@@ -395,7 +406,7 @@ class WebDavSyncEngine {
       modTime: entry.lastModified ?? DateTime.now(),
       length: entry.size,
     );
-    final fp = _pseudoFp(entry);
+    final fp = _etagFingerprint(entry);
     return Updates(
       FileContent(desc, ContentsUpdated(
         FullFingerprint(fp), const NoStamp(), RessStamp.zero,
@@ -404,10 +415,19 @@ class WebDavSyncEngine {
     );
   }
 
-  Fingerprint _pseudoFp(WebDavEntry entry) {
-    final key = '${entry.etag ?? ""}:${entry.size}:${entry.lastModified}';
-    final digest = md5.convert(utf8.encode(key));
-    return Fingerprint(Uint8List.fromList(digest.bytes));
+  /// Create a fingerprint from the WebDAV entry's ETag.
+  /// ETags change when content changes — they're the server's content ID.
+  /// If no ETag available, fall back to size+mtime hash (pseudo-FP).
+  Fingerprint _etagFingerprint(WebDavEntry entry) {
+    if (entry.etag != null && entry.etag!.isNotEmpty) {
+      // ETag is a real content identifier from the server
+      final digest = md5.convert(utf8.encode(entry.etag!));
+      return Fingerprint(Uint8List.fromList(digest.bytes));
+    }
+    // Fallback: pseudo-fingerprint from size+mtime
+    return Fingerprint.pseudo(
+        '${entry.name}:${entry.size}:${entry.lastModified}',
+        entry.size);
   }
 
   PrevState _prevStateOf(Archive archive) {
@@ -480,6 +500,71 @@ class WebDavSyncEngine {
     }
   }
 
+  /// Flatten two paired update trees into per-file triples.
+  ///
+  /// Walks DirContent children recursively so that each FILE or
+  /// ABSENT gets its own (path, ui1, ui2) entry for reconciliation.
+  void _flattenPair(
+    SyncPath path,
+    UpdateItem ui1,
+    UpdateItem ui2,
+    List<(SyncPath, UpdateItem, UpdateItem)> out,
+  ) {
+    // Both are DirContent → recurse into merged children
+    if (ui1 case Updates(content: DirContent(children: var ch1))) {
+      if (ui2 case Updates(content: DirContent(children: var ch2))) {
+        // Sorted merge
+        var i = 0, j = 0;
+        while (i < ch1.length && j < ch2.length) {
+          final cmp = ch1[i].$1.compareTo(ch2[j].$1);
+          if (cmp < 0) {
+            _flattenPair(path.child(ch1[i].$1), ch1[i].$2, const NoUpdates(), out);
+            i++;
+          } else if (cmp > 0) {
+            _flattenPair(path.child(ch2[j].$1), const NoUpdates(), ch2[j].$2, out);
+            j++;
+          } else {
+            _flattenPair(path.child(ch1[i].$1), ch1[i].$2, ch2[j].$2, out);
+            i++; j++;
+          }
+        }
+        while (i < ch1.length) {
+          _flattenPair(path.child(ch1[i].$1), ch1[i].$2, const NoUpdates(), out);
+          i++;
+        }
+        while (j < ch2.length) {
+          _flattenPair(path.child(ch2[j].$1), const NoUpdates(), ch2[j].$2, out);
+          j++;
+        }
+        return;
+      }
+    }
+
+    // One side is DirContent, other is NoUpdates → recurse into the DirContent
+    if (ui1 case Updates(content: DirContent(children: var ch))) {
+      if (ui2 is NoUpdates) {
+        for (final (name, child) in ch) {
+          _flattenPair(path.child(name), child, const NoUpdates(), out);
+        }
+        return;
+      }
+    }
+    if (ui2 case Updates(content: DirContent(children: var ch))) {
+      if (ui1 is NoUpdates) {
+        for (final (name, child) in ch) {
+          _flattenPair(path.child(name), const NoUpdates(), child, out);
+        }
+        return;
+      }
+    }
+
+    // Leaf: both NoUpdates → skip
+    if (ui1 is NoUpdates && ui2 is NoUpdates) return;
+
+    // Leaf: at least one side has an update → add as flat item
+    out.add((path, ui1, ui2));
+  }
+
   /// Count total files in the upload tree.
   void _countFiles(UpdateContent content, _UploadCounter counter) {
     switch (content) {
@@ -501,12 +586,42 @@ class WebDavSyncEngine {
     switch (update.content) {
       case FileContent(desc: var desc):
         counter.done++;
-        Trace.info(TraceCategory.transport,
-            'Upload [${counter.done}/${counter.total}]: $path (${desc.length} B)');
         final localPath = _localRoot.concat(path).toLocal();
         try {
-          final data = File(localPath).readAsBytesSync();
-          await _webdav.writeFileWithParents(_remotePath(path), data);
+          final localData = File(localPath).readAsBytesSync();
+          final remotePath = _remotePath(path);
+
+          // Rsync delta: for large files that already exist on server,
+          // download the old version, compute delta, upload only changes.
+          if (desc.length > 1024 * 1024 && update.prevState is! NewEntry) {
+            try {
+              final exists = await _webdav.exists(remotePath);
+              if (exists) {
+                final oldData = await _webdav.readFile(remotePath);
+                const rsync = Rsync();
+                final tokens = rsync.computeDelta(oldData, localData);
+                final blockSize = Rsync.computeBlockSize(oldData.length);
+                final result = rsync.decompress(blockSize, oldData, tokens);
+                var deltaBytes = 0;
+                for (final t in tokens) {
+                  if (t is StringToken) deltaBytes += t.data.length;
+                }
+                Trace.info(TraceCategory.transport,
+                    'Upload [${counter.done}/${counter.total}]: $path '
+                    'rsync delta ${deltaBytes}B of ${desc.length}B');
+                await _webdav.writeFileWithParents(remotePath, result);
+                break;
+              }
+            } catch (e) {
+              Trace.debug(TraceCategory.transport,
+                  'Rsync delta failed for $path, using full upload: $e');
+            }
+          }
+
+          // Full upload
+          Trace.info(TraceCategory.transport,
+              'Upload [${counter.done}/${counter.total}]: $path (${desc.length} B)');
+          await _webdav.writeFileWithParents(remotePath, localData);
         } catch (e) {
           Trace.warning(TraceCategory.transport, 'Upload $path failed: $e');
         }
