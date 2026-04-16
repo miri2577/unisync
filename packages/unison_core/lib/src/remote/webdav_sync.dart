@@ -291,11 +291,18 @@ class WebDavSyncEngine {
         final arNames = arChildren.keys.toSet();
         final remoteNames = <Name>{};
 
+        Trace.info(TraceCategory.remote,
+            'PROPFIND returned ${entries.length} entries for $path');
         for (final entry in entries) {
+          Trace.info(TraceCategory.remote,
+              '  entry: "${entry.name}" dir=${entry.isDirectory} '
+              'size=${entry.size}');
           final name = Name(entry.name);
           remoteNames.add(name);
           final childPath = path.child(name);
           final childArchive = arChildren[name] ?? const NoArchive();
+          Trace.info(TraceCategory.remote,
+              '  archive: ${childArchive.runtimeType}');
 
           if (entry.isDirectory) {
             final childUi = await _scanWebDav(childArchive, childPath);
@@ -368,19 +375,25 @@ class WebDavSyncEngine {
     if (archive case ArchiveFile(desc: var arDesc, fingerprint: var arFp)) {
       final currentFp = _etagFingerprint(entry);
 
+      Trace.debug(TraceCategory.remote,
+          'Compare ${entry.name}: remote=${entry.size}B etag=${entry.etag} '
+          'archive=${arDesc.length}B fp=${arFp.dataFork.isPseudo ? "pseudo" : "real"}');
+
       // Primary check: ETag fingerprint matches archive → unchanged
       if (currentFp == arFp.dataFork) {
+        Trace.debug(TraceCategory.remote, '  → ETag match, unchanged');
         return const NoUpdates();
       }
 
       // Size-only check: WebDAV uploads don't preserve mtime, so we
-      // can't compare timestamps. If size matches and archive has a
-      // pseudo-FP (from local scan), trust it — the file hasn't changed
-      // on the server since we uploaded it.
+      // can't compare timestamps. If size matches, trust it.
       if (entry.size == arDesc.length) {
+        Trace.debug(TraceCategory.remote, '  → Size match, unchanged');
         return const NoUpdates();
       }
 
+      Trace.debug(TraceCategory.remote,
+          '  → CHANGED (size ${entry.size} != ${arDesc.length})');
       // File changed on remote (different size)
       final desc = Props(
         permissions: 0x1ED,

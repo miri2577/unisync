@@ -141,7 +141,12 @@ class WebDavClient {
       Trace.warning(TraceCategory.remote, 'PROPFIND body read timeout');
       return '';
     });
-    Trace.debug(TraceCategory.remote, 'PROPFIND $url -> ${response.statusCode} (body ${body.length}B)');
+    Trace.info(TraceCategory.remote, 'PROPFIND $url -> ${response.statusCode} (body ${body.length}B)');
+    // Dump XML to known path for debugging
+    try {
+      final home = Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'] ?? '.';
+      File('$home/.unison/propfind_debug.xml').writeAsStringSync(body);
+    } catch (_) {}
 
     if (response.statusCode != 207) {
       throw WebDavException(
@@ -455,15 +460,13 @@ class WebDavClient {
     final doc = XmlDocument.parse(xml);
     final entries = <WebDavEntry>[];
 
-    final responses = doc.findAllElements('d:response')
-        .followedBy(doc.findAllElements('D:response'))
-        .followedBy(doc.findAllElements('response'));
+    // Namespace-agnostic: find all 'response' elements regardless of prefix
+    final responses = doc.rootElement.descendants
+        .whereType<XmlElement>()
+        .where((e) => e.localName == 'response');
 
     for (final resp in responses) {
-      final href = _getText(resp, 'href') ??
-          _getText(resp, 'd:href') ??
-          _getText(resp, 'D:href') ??
-          '';
+      final href = _getText(resp, 'href') ?? '';
 
       // Skip the directory itself (depth=1 includes parent)
       if (_isParentEntry(href, requestUrl)) continue;
@@ -510,33 +513,33 @@ class WebDavClient {
     return normHref == normReq;
   }
 
-  String? _getText(XmlElement elem, String tag) {
-    final found = elem.findAllElements(tag);
+  /// Find element by local name, ignoring namespace prefix.
+  /// Works with d:href, D:href, lp1:href, href etc.
+  Iterable<XmlElement> _findByLocal(XmlElement elem, String localName) {
+    return elem.descendants
+        .whereType<XmlElement>()
+        .where((e) => e.localName == localName);
+  }
+
+  String? _getText(XmlElement elem, String localName) {
+    final found = _findByLocal(elem, localName);
     return found.isNotEmpty ? found.first.innerText : null;
   }
 
   String? _getPropText(XmlElement response, String propName) {
-    // Search in all prop elements
-    for (final prop in response.findAllElements('d:prop')
-        .followedBy(response.findAllElements('D:prop'))
-        .followedBy(response.findAllElements('prop'))) {
-      final found = prop.findAllElements('d:$propName')
-          .followedBy(prop.findAllElements('D:$propName'))
-          .followedBy(prop.findAllElements(propName));
-      if (found.isNotEmpty) return found.first.innerText;
+    for (final prop in _findByLocal(response, 'prop')) {
+      final found = _findByLocal(prop, propName);
+      if (found.isNotEmpty) {
+        final text = found.first.innerText.trim();
+        if (text.isNotEmpty) return text;
+      }
     }
     return null;
   }
 
   bool _hasResourceType(XmlElement response, String type) {
-    for (final rt in response.findAllElements('d:resourcetype')
-        .followedBy(response.findAllElements('D:resourcetype'))
-        .followedBy(response.findAllElements('resourcetype'))) {
-      if (rt.findAllElements('d:$type').isNotEmpty ||
-          rt.findAllElements('D:$type').isNotEmpty ||
-          rt.findAllElements(type).isNotEmpty) {
-        return true;
-      }
+    for (final rt in _findByLocal(response, 'resourcetype')) {
+      if (_findByLocal(rt, type).isNotEmpty) return true;
     }
     return false;
   }
