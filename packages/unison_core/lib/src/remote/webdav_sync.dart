@@ -7,6 +7,7 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -255,18 +256,22 @@ class WebDavSyncEngine {
   /// Scan local filesystem against archive.
   /// Runs in a separate isolate to avoid blocking the UI thread.
   Future<UpdateItem> _scanLocal(Archive archive) async {
-    // Yield to let UI show "Scanning..." before blocking
-    await Future.delayed(Duration.zero);
+    final rootPath = _localRoot.toLocal();
 
-    final detector = UpdateDetector(fpCache: _fpCache);
-    final (ui, _) = detector.findUpdates(
-      _localRoot, SyncPath.empty, archive,
-      const UpdateConfig(
-        useFastCheck: true,
-        usePseudoFingerprintForNewFiles: true,
-      ),
-    );
-    return ui;
+    // Run the entire scan in a background isolate so the UI stays responsive.
+    // The scan can take 30+ seconds for large folders (stat() on every file).
+    return await Isolate.run(() {
+      final root = Fspath.fromLocal(rootPath);
+      final detector = UpdateDetector();
+      final (ui, _) = detector.findUpdates(
+        root, SyncPath.empty, archive,
+        const UpdateConfig(
+          useFastCheck: true,
+          usePseudoFingerprintForNewFiles: true,
+        ),
+      );
+      return ui;
+    });
   }
 
   /// Scan WebDAV server against archive.
