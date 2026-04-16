@@ -99,7 +99,7 @@ class WebDavSyncEngine {
     // Phase 2: Scan local
     onProgress?.call(SyncPhase.scanning, 'Scanning local files...');
     Trace.info(TraceCategory.update, 'Scanning local: $_localRoot');
-    final localUpdates = _scanLocal(archive);
+    final localUpdates = await _scanLocal(archive);
     Trace.info(TraceCategory.update, 'Local scan done');
 
     // Phase 3: Scan WebDAV (within prefix)
@@ -173,11 +173,12 @@ class WebDavSyncEngine {
     // Phase 6: Rebuild and save archive ONLY if all items succeeded.
     // Saving a partial archive would falsely claim things are in sync,
     // causing future runs to "delete" missing remote files from local.
+    final succeeded = results.whereType<TransportSuccess>().length;
     final failed = results.whereType<TransportError>().length;
     final skipped = results.whereType<TransportSkipped>().length;
-    if (failed > 0) {
+    if (succeeded == 0 && failed > 0) {
       Trace.warning(TraceCategory.archive,
-          'NOT saving archive: $failed failed transfers — would corrupt sync state');
+          'NOT saving archive: 0 succeeded, $failed failed');
     } else if (skipped > 0 && results.length == 1 && results.first is TransportSkipped) {
       // Only-item-was-skipped case (e.g. nothing to do, or all conflicts)
       Trace.info(TraceCategory.archive, 'No successful transfers, archive unchanged');
@@ -252,13 +253,14 @@ class WebDavSyncEngine {
   }
 
   /// Scan local filesystem against archive.
-  UpdateItem _scanLocal(Archive archive) {
+  /// Runs in a separate isolate to avoid blocking the UI thread.
+  Future<UpdateItem> _scanLocal(Archive archive) async {
+    // Yield to let UI show "Scanning..." before blocking
+    await Future.delayed(Duration.zero);
+
     final detector = UpdateDetector(fpCache: _fpCache);
     final (ui, _) = detector.findUpdates(
       _localRoot, SyncPath.empty, archive,
-      // - useFastCheck: skip MD5 if mtime+size unchanged
-      // - usePseudoFingerprintForNewFiles: don't hash files on first sync
-      //   (we'd upload them anyway). Massive speedup for Downloads-size dirs.
       const UpdateConfig(
         useFastCheck: true,
         usePseudoFingerprintForNewFiles: true,
